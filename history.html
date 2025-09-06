@@ -135,7 +135,6 @@
         width: 100%;
         margin: 0 auto;
         padding: 20px;
-        overflow-x: auto;
       }
 
       .stats {
@@ -414,38 +413,6 @@
 
       .item-children .history-item > .item-header:hover {
         background-color: var(--bg-surface-variant);
-      }
-
-      /* カスタムスクロールバー */
-      ::-webkit-scrollbar {
-        width: 8px;
-        height: 8px;
-      }
-
-      ::-webkit-scrollbar-track {
-        background: var(--bg-surface-variant);
-        border-radius: 4px;
-      }
-
-      ::-webkit-scrollbar-thumb {
-        background: var(--border-color);
-        border-radius: 4px;
-        transition: background-color 0.2s ease;
-      }
-
-      ::-webkit-scrollbar-thumb:hover {
-        background: var(--text-secondary);
-      }
-
-      /* Firefox用スクロールバー */
-      * {
-        scrollbar-width: thin;
-        scrollbar-color: var(--border-color) var(--bg-surface-variant);
-      }
-
-      .search-box {
-        width: 300px;
-        max-width: 100%;
       }
 
       /* レスポンシブデザイン - 横スクロール対応 */
