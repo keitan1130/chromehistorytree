@@ -460,21 +460,70 @@ class HistoryManager {
     // 孤立したノード（親も子も持たない）に対してURL階層分析を適用
     const orphanUrls = rootUrls.filter(url => parentToChildren.get(url).length === 0);
 
-    if (orphanUrls.length > 1) {
-      console.log(`孤立ノード ${orphanUrls.length} 個に対してURL階層分析を実行...`);
+    // さらに、全てのルートノード間でもURL階層分析を適用してツリー合体を検討
+    console.log(`全ルートノード ${rootUrls.length} 個に対してURL階層分析を実行...`);
+    console.log(`うち孤立ノード: ${orphanUrls.length} 個`);
 
-      // URL階層から親子関係を推定
-      const inferredRelations = this.inferParentFromURL(orphanUrls, urlVisitMap);
+    if (rootUrls.length > 1) {
+      // URL階層から親子関係を推定（全ルートノードを対象）
+      const inferredRelations = this.inferParentFromURL(rootUrls, urlVisitMap);
 
-      // 推定された関係を適用（スコアの高い順）
-      for (const relation of inferredRelations.slice(0, Math.min(10, inferredRelations.length))) {
-        const { parent: parentUrl, child: childUrl } = relation;
+      // 推定された関係を適用（スコアの高い順、より多くの関係を検討）
+      for (const relation of inferredRelations.slice(0, Math.min(25, inferredRelations.length))) {
+        const { parent: parentUrl, child: childUrl, score } = relation;
 
         // 循環参照チェック
         if (!this.wouldCreateCycle(parentUrl, childUrl, childToParent)) {
-          // 既存の親が存在しないか、より良い関係の場合のみ適用
           const currentParent = childToParent.get(childUrl);
+
+          // 以下の場合に親子関係を設定/更新：
+          // 1. 子が現在親を持っていない場合
+          // 2. より高いスコアの関係が見つかった場合（スコア50以上なら適用を検討）
+          // 3. 確実な階層関係（スコア800以上）なら強制適用
+          let shouldApply = false;
+          let reason = '';
+
           if (!currentParent) {
+            shouldApply = true;
+            reason = '現在親なし';
+          } else if (score >= 800) {
+            // ルートページなどの確実な階層関係は既存関係を上書き
+            shouldApply = true;
+            reason = `確実な階層関係(${score})で既存関係を上書き`;
+          } else if (score >= 100) {
+            // かなり良いスコアの場合も上書きを検討
+            shouldApply = true;
+            reason = `高スコア(${score})で既存関係を上書き`;
+          } else if (score >= 50) {
+            // 中程度のスコアでも、孤立ノード同士なら積極的に合体
+            const parentHasNoChildren = parentToChildren.get(parentUrl).length === 0;
+            const childIsOrphan = orphanUrls.includes(childUrl);
+
+            if (parentHasNoChildren || childIsOrphan) {
+              shouldApply = true;
+              reason = `中スコア(${score})で孤立ノード同士を合体`;
+            }
+          }
+
+          if (shouldApply) {
+            // 既存の親子関係を削除（存在する場合）
+            if (currentParent) {
+              const currentParentChildren = parentToChildren.get(currentParent);
+              const index = currentParentChildren.indexOf(childUrl);
+              if (index > -1) {
+                currentParentChildren.splice(index, 1);
+                // 元の親ノードからも子を削除
+                const oldParentNode = nodes.get(currentParent);
+                if (oldParentNode) {
+                  const childIndex = oldParentNode.children.findIndex(child => child.url === childUrl);
+                  if (childIndex > -1) {
+                    oldParentNode.children.splice(childIndex, 1);
+                  }
+                }
+              }
+            }
+
+            // 新しい親子関係を設定
             childToParent.set(childUrl, parentUrl);
             parentToChildren.get(parentUrl).push(childUrl);
 
@@ -483,10 +532,38 @@ class HistoryManager {
             const childNode = nodes.get(childUrl);
             if (parentNode && childNode) {
               parentNode.children.push(childNode);
-              console.log(`URL階層分析により ${parentUrl} → ${childUrl} の関係を追加`);
+              console.log(`URL階層分析により ${parentUrl} → ${childUrl} の関係を追加 (${reason})`);
             }
           }
         }
+      }
+    }
+
+    // 親子関係の逆転チェック - 子の方が親として適切な場合は関係を逆転
+    console.log('\n=== 親子関係の逆転チェックを実行 ===');
+    const relationsToReverse = [];
+
+    for (const [childUrl, parentUrl] of childToParent) {
+      const childInfo = urlVisitMap.get(childUrl);
+      const parentInfo = urlVisitMap.get(parentUrl);
+
+      if (childInfo && parentInfo) {
+        const shouldReverse = this.shouldReverseParentChild(childUrl, parentUrl, urlVisitMap);
+        if (shouldReverse) {
+          relationsToReverse.push({ currentChild: childUrl, currentParent: parentUrl });
+          console.log(`関係逆転候補: ${childUrl} が ${parentUrl} より適切な親`);
+        }
+      }
+    }
+
+    // 逆転を実行
+    for (const { currentChild, currentParent } of relationsToReverse) {
+      // 循環参照を避けるため、逆転後に問題がないかチェック
+      if (!this.wouldCreateCycleAfterReverse(currentChild, currentParent, childToParent)) {
+        this.reverseParentChildRelation(currentChild, currentParent, childToParent, parentToChildren, nodes);
+        console.log(`関係を逆転: ${currentChild} → ${currentParent}`);
+      } else {
+        console.log(`循環参照のため逆転をスキップ: ${currentChild} ↔ ${currentParent}`);
       }
     }
 
@@ -642,9 +719,15 @@ class HistoryManager {
     } else {
       // 同じドメインで階層が浅い場合、潜在的な親として考慮
       const depthDiff = child.depth - parent.depth;
-      if (depthDiff <= 2) { // 深さの差を2以下に制限を緩和
-        score += Math.max(0, 30 - depthDiff * 5); // ベーススコアを30に増加
+      if (depthDiff <= 3) { // 深さの差を3以下に緩和
+        score += Math.max(0, 60 - depthDiff * 10); // ベーススコアを60に大幅増加
         console.log(`    同じドメインの浅い階層 (深さ差: ${depthDiff}, スコア: ${score})`);
+
+        // 特に親が浅い場合はさらにボーナス
+        if (parent.depth <= 1) {
+          score += 20; // 親が浅い場合のボーナス
+          console.log(`    浅い親へのボーナス (+20, 総スコア: ${score})`);
+        }
       }
     }
 
@@ -1032,6 +1115,102 @@ class HistoryManager {
     const minutes = String(date.getMinutes()).padStart(2, '0');
 
     return `${year}/${month}/${day} ${hours}:${minutes}`;
+  }
+
+  // 親子関係を逆転すべきかを判定
+  shouldReverseParentChild(currentChildUrl, currentParentUrl, urlVisitMap) {
+    try {
+      const childInfo = urlVisitMap.get(currentChildUrl);
+      const parentInfo = urlVisitMap.get(currentParentUrl);
+
+      const childUrl = new URL(currentChildUrl);
+      const parentUrl = new URL(currentParentUrl);
+
+      // ドメインが違う場合は逆転しない
+      if (childUrl.hostname !== parentUrl.hostname) {
+        return false;
+      }
+
+      const childParts = childUrl.pathname.split('/').filter(part => part.length > 0);
+      const parentParts = parentUrl.pathname.split('/').filter(part => part.length > 0);
+
+      // 子の方が階層が浅い場合（より一般的）は逆転候補
+      if (childParts.length < parentParts.length) {
+        console.log(`    ${currentChildUrl} (深さ${childParts.length}) < ${currentParentUrl} (深さ${parentParts.length})`);
+        return true;
+      }
+
+      // 深さが同じで、子がルートページ系の場合
+      if (childParts.length === parentParts.length) {
+        const childLast = childParts[childParts.length - 1]?.toLowerCase() || '';
+        const parentLast = parentParts[parentParts.length - 1]?.toLowerCase() || '';
+
+        // 子がより汎用的なページ名の場合
+        const genericPages = ['index', 'home', 'main', 'top', 'root'];
+        if (genericPages.includes(childLast) && !genericPages.includes(parentLast)) {
+          console.log(`    ${currentChildUrl} は汎用的ページ (${childLast})`);
+          return true;
+        }
+      }
+
+      // 子がルートページ（/）の場合
+      if (childParts.length === 0 && parentParts.length > 0) {
+        console.log(`    ${currentChildUrl} はルートページ`);
+        return true;
+      }
+
+      return false;
+    } catch (error) {
+      console.error('親子逆転判定エラー:', error);
+      return false;
+    }
+  }
+
+  // 親子関係逆転後に循環参照が起きないかチェック
+  wouldCreateCycleAfterReverse(newParent, newChild, childToParent) {
+    // newChildが既に他の親を持つ場合、その親がnewParentの祖先でないかチェック
+    let current = childToParent.get(newChild);
+    const visited = new Set([newParent]); // 新しい親は既に訪問済みとして扱う
+
+    while (current && !visited.has(current)) {
+      if (current === newParent) {
+        return true; // 循環参照が発生
+      }
+      visited.add(current);
+      current = childToParent.get(current);
+    }
+
+    return false;
+  }
+
+  // 親子関係を逆転する
+  reverseParentChildRelation(newParentUrl, newChildUrl, childToParent, parentToChildren, nodes) {
+    // 現在の関係を削除
+    childToParent.delete(newChildUrl);
+    const currentParentChildren = parentToChildren.get(newParentUrl);
+    const childIndex = currentParentChildren.indexOf(newChildUrl);
+    if (childIndex > -1) {
+      currentParentChildren.splice(childIndex, 1);
+    }
+
+    // 新しい関係を設定
+    childToParent.set(newChildUrl, newParentUrl);
+    parentToChildren.get(newParentUrl).push(newChildUrl);
+
+    // ノードの子要素も更新
+    const newParentNode = nodes.get(newParentUrl);
+    const newChildNode = nodes.get(newChildUrl);
+
+    if (newParentNode && newChildNode) {
+      // 旧親から子を削除
+      const oldChildIndex = newParentNode.children.findIndex(child => child.url === newChildUrl);
+      if (oldChildIndex > -1) {
+        newParentNode.children.splice(oldChildIndex, 1);
+      }
+
+      // 新親に子を追加
+      newChildNode.children.push(newParentNode);
+    }
   }
 }
 
