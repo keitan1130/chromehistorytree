@@ -107,6 +107,10 @@
         transition: border-color 0.2s ease, box-shadow 0.2s ease;
       }
 
+      input[type="number"] {
+        text-align: center;
+      }
+
       select:focus, input:focus {
         outline: none;
         border-color: var(--accent-primary);
@@ -331,8 +335,8 @@
         white-space: nowrap;
         margin-right: 8px;
         flex-shrink: 0;
-        min-width: 80px;
-        width: 80px;
+        min-width: 100px;
+        width: 100px;
         text-align: left;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -469,8 +473,8 @@
 
         .item-time {
           margin-left: 0;
-          width: 80px;
-          min-width: 80px;
+          width: 100px;
+          min-width: 100px;
           flex-shrink: 0;
         }
 
@@ -505,23 +509,8 @@
       </div>
       <div class="controls">
         <div class="control-group">
-          <label for="days">期間:</label>
-          <select id="days">
-            <option value="1">1日</option>
-            <option value="3">3日</option>
-            <option value="7" selected>1週間</option>
-            <option value="30">1ヶ月</option>
-            <option value="90">3ヶ月</option>
-          </select>
-        </div>
-        <div class="control-group">
-          <label for="maxResults">最大件数:</label>
-          <select id="maxResults">
-            <option value="100">100</option>
-            <option value="500" selected>500</option>
-            <option value="1000">1000</option>
-            <option value="2000">2000</option>
-          </select>
+          <label for="days">期間（日）:</label>
+          <input type="number" id="days" value="7" min="1" max="365" step="1" style="width: 80px;">
         </div>
         <div class="control-group">
           <label for="search">検索:</label>
@@ -530,8 +519,8 @@
         <button id="refresh">更新</button>
         <div class="stats-inline" id="statsInline" style="display: none;">
           <div class="stat-item">
-            <div class="stat-value" id="todayVisitsInline">0</div>
-            <div class="stat-label">今日の訪問</div>
+            <div class="stat-value" id="historyCount">0</div>
+            <div class="stat-label">履歴表示数</div>
           </div>
         </div>
       </div>

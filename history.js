@@ -15,6 +15,7 @@ class HistoryManager {
     this.filteredData = [];
     this.currentSearchTerm = '';
     this.isDarkMode = this.getPreferredTheme();
+    this.daysInputTimeout = null; // 入力遅延タイマー
     this.stats = {
       totalSites: 0,
       totalVisits: 0,
@@ -56,20 +57,24 @@ class HistoryManager {
       this.loadHistory();
     });
 
-    document.getElementById('days').addEventListener('change', () => {
-      this.loadHistory();
-    });
+    document.getElementById('days').addEventListener('input', () => {
+      // 入力値の検証
+      const daysInput = document.getElementById('days');
+      const value = parseInt(daysInput.value);
 
-    document.getElementById('maxResults').addEventListener('change', () => {
-      this.loadHistory();
+      if (value && value > 0 && value <= 365) {
+        // 有効な値の場合のみ更新（500ms後に自動更新）
+        clearTimeout(this.daysInputTimeout);
+        this.daysInputTimeout = setTimeout(() => {
+          this.loadHistory();
+        }, 500);
+      }
     });
 
     document.getElementById('search').addEventListener('input', (e) => {
       this.currentSearchTerm = e.target.value.toLowerCase();
       this.filterAndRenderData();
-    });
-
-    // テーマ切り替えボタンのイベントリスナー
+    });    // テーマ切り替えボタンのイベントリスナー
     const themeToggle = document.getElementById('themeToggle');
     if (themeToggle) {
       themeToggle.addEventListener('click', () => {
@@ -112,9 +117,8 @@ class HistoryManager {
 
     try {
       const days = parseInt(document.getElementById('days').value);
-      const maxResults = parseInt(document.getElementById('maxResults').value);
 
-      const roots = await this.buildHistoryTree({ days, maxResults });
+      const roots = await this.buildHistoryTree({ days });
       this.filteredData = roots;
 
       this.calculateStats();
@@ -133,9 +137,9 @@ class HistoryManager {
     }
   }
 
-  async buildHistoryTree({ days = 7, maxResults = 500 } = {}) {
+  async buildHistoryTree({ days = 7 } = {}) {
     const startTime = Date.now() - days * 24 * 60 * 60 * 1000;
-    const items = await historySearch({ text: '', startTime, maxResults });
+    const items = await historySearch({ text: '', startTime, maxResults: 10000 });
 
     // すべての訪問情報を収集
     this.allVisits = [];
@@ -338,10 +342,10 @@ class HistoryManager {
       todayVisits: todayCount
     };
 
-    // インライン統計を更新
-    const todayVisitsInline = document.getElementById('todayVisitsInline');
-    if (todayVisitsInline) {
-      todayVisitsInline.textContent = this.stats.todayVisits;
+    // インライン統計を更新（履歴表示数を表示）
+    const historyCount = document.getElementById('historyCount');
+    if (historyCount) {
+      historyCount.textContent = this.allVisits.length;
     }
   }
 
@@ -524,32 +528,14 @@ class HistoryManager {
   }
 
   formatTime(date) {
-    const now = new Date();
-    const diffMs = now - date;
-    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-    const diffDays = Math.floor(diffHours / 24);
+    // YYYY/MM/DD HH:MM 形式で統一
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
 
-    if (diffDays === 0) {
-      if (diffHours === 0) {
-        const diffMinutes = Math.floor(diffMs / (1000 * 60));
-        if (diffMinutes === 0) {
-          return 'たった今';
-        }
-        return `${diffMinutes}分前`;
-      }
-      return `${diffHours}時間前`;
-    } else if (diffDays === 1) {
-      return `昨日 ${date.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}`;
-    } else if (diffDays < 7) {
-      return `${diffDays}日前 ${date.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}`;
-    } else {
-      return date.toLocaleDateString('ja-JP', {
-        month: 'numeric',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
-      });
-    }
+    return `${year}/${month}/${day} ${hours}:${minutes}`;
   }
 }
 
