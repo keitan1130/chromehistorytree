@@ -456,9 +456,47 @@ class HistoryManager {
 
     // ルートノード（親を持たない）を取得
     const rootUrls = Array.from(nodes.keys()).filter(url => !childToParent.has(url));
-    const rootNodes = rootUrls
+
+    // 孤立したノード（親も子も持たない）に対してURL階層分析を適用
+    const orphanUrls = rootUrls.filter(url => parentToChildren.get(url).length === 0);
+
+    if (orphanUrls.length > 1) {
+      console.log(`孤立ノード ${orphanUrls.length} 個に対してURL階層分析を実行...`);
+
+      // URL階層から親子関係を推定
+      const inferredRelations = this.inferParentFromURL(orphanUrls, urlVisitMap);
+
+      // 推定された関係を適用（スコアの高い順）
+      for (const relation of inferredRelations.slice(0, Math.min(10, inferredRelations.length))) {
+        const { parent: parentUrl, child: childUrl } = relation;
+
+        // 循環参照チェック
+        if (!this.wouldCreateCycle(parentUrl, childUrl, childToParent)) {
+          // 既存の親が存在しないか、より良い関係の場合のみ適用
+          const currentParent = childToParent.get(childUrl);
+          if (!currentParent) {
+            childToParent.set(childUrl, parentUrl);
+            parentToChildren.get(parentUrl).push(childUrl);
+
+            // ノードの子要素を更新
+            const parentNode = nodes.get(parentUrl);
+            const childNode = nodes.get(childUrl);
+            if (parentNode && childNode) {
+              parentNode.children.push(childNode);
+              console.log(`URL階層分析により ${parentUrl} → ${childUrl} の関係を追加`);
+            }
+          }
+        }
+      }
+    }
+
+    // 最終的なルートノードを取得
+    const finalRootUrls = Array.from(nodes.keys()).filter(url => !childToParent.has(url));
+    const rootNodes = finalRootUrls
       .map(url => nodes.get(url))
       .sort((a, b) => b.visitTime - a.visitTime); // 時間順（新しい順）
+
+    console.log(`集計モード: ${nodes.size}個のURL、${finalRootUrls.length}個のルートノード`);
 
     return rootNodes;
   }
@@ -491,6 +529,177 @@ class HistoryManager {
 
     // 同じ回数なら時間で比較（早い方を優先）
     return newTransition.firstTime < currentTransition.firstTime;
+  }
+
+  // URLの階層構造から親子関係を推定（孤立ノード用）
+  inferParentFromURL(orphanNodes, urlVisitMap) {
+    const urlHierarchy = new Map();
+
+    // 各URLを解析してパス階層を構築
+    for (const [url, urlInfo] of urlVisitMap) {
+      try {
+        const urlObj = new URL(url);
+        const pathParts = urlObj.pathname.split('/').filter(part => part.length > 0);
+        const domain = urlObj.hostname;
+
+        urlHierarchy.set(url, {
+          domain: domain,
+          pathParts: pathParts,
+          depth: pathParts.length,
+          url: url,
+          urlInfo: urlInfo
+        });
+      } catch (error) {
+        // 無効なURLの場合はスキップ
+        continue;
+      }
+    }
+
+    // 孤立ノードに対して階層的な親を見つける
+    const newRelations = [];
+
+    for (const orphanUrl of orphanNodes) {
+      const orphan = urlHierarchy.get(orphanUrl);
+      if (!orphan) continue;
+
+      console.log(`\n=== 孤立ノードの親を検索: ${orphanUrl} ===`);
+      console.log(`ドメイン: ${orphan.domain}, パス: [${orphan.pathParts.join(', ')}], 深さ: ${orphan.depth}`);
+
+      let bestParent = null;
+      let bestScore = -1;
+
+      // 他のURLと比較して最適な親を見つける
+      for (const [candidateUrl, candidate] of urlHierarchy) {
+        if (candidateUrl === orphanUrl) continue;
+
+        const score = this.calculateParentScore(orphan, candidate);
+        if (score > 0) {
+          console.log(`  候補: ${candidateUrl} -> スコア: ${score}`);
+          console.log(`    パス: [${candidate.pathParts.join(', ')}], 深さ: ${candidate.depth}`);
+        }
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestParent = candidate;
+        }
+      }
+
+      console.log(`  最適な親: ${bestParent ? bestParent.url : 'なし'} (スコア: ${bestScore})`);
+
+      // 確実な階層関係または十分なスコアがあれば親子関係を追加
+      // 確実な階層関係の場合はスコア1000以上として判定
+      if (bestParent && (bestScore >= 1000 || bestScore > 0)) {
+        newRelations.push({
+          parent: bestParent.url,
+          child: orphanUrl,
+          score: bestScore,
+          type: bestScore >= 1000 ? 'url_hierarchy_certain' : 'url_hierarchy'
+        });
+      }
+    }
+
+    // スコア順にソートして返す
+    return newRelations.sort((a, b) => b.score - a.score);
+  }
+
+  // URLの親子関係スコアを計算
+  calculateParentScore(child, parent) {
+    // 同じドメインでない場合は0
+    if (child.domain !== parent.domain) {
+      return 0;
+    }
+
+    // 子の方が浅い場合は0
+    if (child.depth <= parent.depth) {
+      return 0;
+    }
+
+    let score = 0;
+
+    // パス接頭辞の一致度をチェック
+    const matchingParts = this.countMatchingPathParts(parent.pathParts, child.pathParts);
+
+    if (matchingParts === parent.pathParts.length && matchingParts > 0) {
+      // 完全なパス接頭辞マッチ - 確実な階層関係
+      score += 1000; // 確実性を示す高いスコア
+
+      // 深さの差が小さいほど高スコア（直接の親子関係を優先）
+      const depthDiff = child.depth - parent.depth;
+      score += Math.max(0, 100 - depthDiff * 5);
+
+      // 特定のパターンにボーナス
+      score += this.getUrlPatternBonus(parent.pathParts, child.pathParts);
+
+      console.log(`    確実な階層関係: ${parent.url} -> ${child.url} (スコア: ${score})`);
+    } else if (parent.pathParts.length === 0) {
+      // ルートページ（/）は同じドメインの全てのページの確実な親
+      score += 800; // 非常に高いスコアでルートページを親として優先
+      console.log(`    ルートページ親候補 (スコア: ${score})`);
+    } else if (matchingParts > 0) {
+      // 部分的なパス一致
+      score += matchingParts * 20;
+      console.log(`    部分的パス一致: ${matchingParts}個の共通パス (スコア: ${score})`);
+    } else {
+      // 同じドメインで階層が浅い場合、潜在的な親として考慮
+      const depthDiff = child.depth - parent.depth;
+      if (depthDiff <= 2) { // 深さの差を2以下に制限を緩和
+        score += Math.max(0, 30 - depthDiff * 5); // ベーススコアを30に増加
+        console.log(`    同じドメインの浅い階層 (深さ差: ${depthDiff}, スコア: ${score})`);
+      }
+    }
+
+    return score;
+  }
+
+  // パス部分の一致数を数える
+  countMatchingPathParts(parentParts, childParts) {
+    let matches = 0;
+    const minLength = Math.min(parentParts.length, childParts.length);
+
+    for (let i = 0; i < minLength; i++) {
+      if (parentParts[i] === childParts[i]) {
+        matches++;
+      } else {
+        break; // 接頭辞でなくなったら終了
+      }
+    }
+
+    return matches;
+  }
+
+  // URLパターンに基づくボーナススコア
+  getUrlPatternBonus(parentParts, childParts) {
+    let bonus = 0;
+
+    // よくあるパターンにボーナスを付与
+    if (parentParts.length > 0) {
+      const parentLast = parentParts[parentParts.length - 1].toLowerCase();
+
+      // カテゴリ系のパターン
+      if (['category', 'categories', 'tag', 'tags', 'section'].includes(parentLast)) {
+        bonus += 20;
+      }
+
+      // 商品・記事系のパターン
+      if (['products', 'items', 'posts', 'articles', 'blog'].includes(parentLast)) {
+        bonus += 20;
+      }
+
+      // ユーザー系のパターン
+      if (['user', 'users', 'profile', 'account'].includes(parentLast)) {
+        bonus += 15;
+      }
+    }
+
+    // 数値IDパターン（詳細ページ）
+    if (childParts.length > 0) {
+      const childLast = childParts[childParts.length - 1];
+      if (/^\d+$/.test(childLast) || /^[a-f0-9-]{8,}/.test(childLast)) {
+        bonus += 25; // ID的なものは詳細ページの可能性が高い
+      }
+    }
+
+    return bonus;
   }
 
   // ページネーション関連のメソッド
