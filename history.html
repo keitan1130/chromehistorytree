@@ -208,7 +208,7 @@
       }
 
       .history-item > .item-header {
-        padding: 8px 12px;
+        padding: 6px 12px;
         border-radius: 6px;
         transition: background-color 0.2s ease;
         margin: 0 -12px;
@@ -325,9 +325,9 @@
       .item-children > ul::before {
         content: '';
         position: absolute;
-        left: -35px;
-        top: -25px;
-        height: 45px;
+        left: -34px;
+        top: -27px;
+        height: 43px;
         border-left: 1px solid var(--border-color);
         z-index: 0;
       }
@@ -342,9 +342,9 @@
       .item-children > ul > li::before {
         content: '';
         position: absolute;
-        left: -35px;
-        top: 20px;
-        width: 35px;
+        left: -34px;
+        top: 16px;
+        width: 34px;
         height: 1px;
         background: var(--border-color);
         z-index: 2;
@@ -354,8 +354,8 @@
       .item-children > ul > li:not(.is-last-child)::after {
         content: '';
         position: absolute;
-        left: -6px; /* toggleの中央位置 */
-        top: 18px; /* 現在のtoggleの中央 */
+        left: -34px; /* toggleの中央位置 */
+        top: 17px; /* 現在のtoggleの中央 */
         height: calc(100% + 2px); /* 次の要素のtoggle中央まで */
         border-left: 1px solid var(--border-color);
         z-index: 0;
@@ -378,19 +378,8 @@
         list-style: none;
       }
 
-      /* 最後の子要素の下余白を削除 */
-      .item-children > ul > li:last-child {
-        margin-bottom: 0px;
-      }
-
       .item-children.collapsed {
         display: none;
-      }
-
-      /* 子要素のホバー効果 */
-      .item-children .history-item {
-        margin-bottom: 1px;
-        padding: 4px 0;
       }
 
       .item-children .history-item > .item-header {
