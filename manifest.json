@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "History Tree",
+  "version": "1.1",
+  "description": "履歴をツリー形式で見やすく表示します。時系列順にソートされ、サイト間の関連性も確認できます。",
+  "permissions": [
+    "history",
+    "storage",
+    "tabs",
+    "favicon"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "履歴ツリーを表示"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["history.html"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

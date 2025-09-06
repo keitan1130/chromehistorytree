@@ -1,0 +1,548 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' data: https://www.google.com https:; img-src 'self' data: https: chrome://favicon/; connect-src 'self' https:;" />
+    <title>履歴ツリー - History Tree</title>
+    <style>
+      :root {
+        /* Light theme colors - Google Material Design 3 */
+        --bg-primary: #ffffff;
+        --bg-secondary: #f8f9fa;
+        --bg-surface: #ffffff;
+        --bg-surface-variant: #f1f3f4;
+        --text-primary: #1f1f1f;
+        --text-secondary: #5f6368;
+        --text-tertiary: #80868b;
+        --accent-primary: #1a73e8;
+        --accent-hover: #1557b0;
+        --accent-light: #e8f0fe;
+        --border-color: #dadce0;
+        --border-light: #e9ecef;
+        --error-color: #d93025;
+        --success-color: #137333;
+        --warning-color: #f9ab00;
+        --shadow: 0 1px 3px rgba(0,0,0,0.1);
+        --shadow-hover: 0 2px 8px rgba(0,0,0,0.15);
+      }
+
+      [data-theme="dark"] {
+        /* Dark theme colors - Google Material Design 3 */
+        --bg-primary: #202124;
+        --bg-secondary: #1a1a1a;
+        --bg-surface: #2d2e30;
+        --bg-surface-variant: #3c4043;
+        --text-primary: #e8eaed;
+        --text-secondary: #9aa0a6;
+        --text-tertiary: #80868b;
+        --accent-primary: #8ab4f8;
+        --accent-hover: #aecbfa;
+        --accent-light: #1e3a8a;
+        --border-color: #5f6368;
+        --border-light: #3c4043;
+        --error-color: #f28b82;
+        --success-color: #81c995;
+        --warning-color: #fdd663;
+        --shadow: 0 1px 3px rgba(0,0,0,0.3);
+        --shadow-hover: 0 2px 8px rgba(0,0,0,0.4);
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        background: var(--bg-primary);
+        color: var(--text-primary);
+        line-height: 1.5;
+        min-width: 800px;
+        overflow-x: auto;
+      }
+
+      .header {
+        background: var(--bg-primary);
+        border-bottom: 1px solid var(--border-color);
+        padding: 20px;
+        box-shadow: var(--shadow);
+        min-width: 800px;
+        overflow-x: auto;
+      }
+
+      .header h1 {
+        font-size: 24px;
+        margin-bottom: 10px;
+        color: var(--accent-primary);
+        font-weight: 400;
+      }
+
+      .controls {
+        display: flex;
+        gap: 15px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      .control-group {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .control-group label {
+        font-weight: 500;
+        color: var(--text-secondary);
+      }
+
+      select, input {
+        padding: 8px 12px;
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        font-size: 14px;
+        background: var(--bg-primary);
+        color: var(--text-primary);
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+      }
+
+      select:focus, input:focus {
+        outline: none;
+        border-color: var(--accent-primary);
+        box-shadow: 0 0 0 2px var(--accent-light);
+      }
+
+      button {
+        background: var(--accent-primary);
+        color: var(--bg-primary);
+        border: none;
+        padding: 8px 16px;
+        border-radius: 20px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 500;
+        transition: background-color 0.2s ease, box-shadow 0.2s ease;
+      }
+
+      button:hover {
+        background: var(--accent-hover);
+        box-shadow: var(--shadow-hover);
+      }
+
+      .container {
+        width: 100%;
+        margin: 0 auto;
+        padding: 20px;
+        overflow-x: auto;
+      }
+
+      .stats {
+        background: var(--bg-primary);
+        padding: 20px;
+        border-radius: 12px;
+        box-shadow: var(--shadow);
+        margin-bottom: 20px;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 20px;
+      }
+
+      .stat-item {
+        text-align: center;
+      }
+
+      .stat-value {
+        font-size: 28px;
+        font-weight: 700;
+        color: var(--accent-primary);
+      }
+
+      .stat-label {
+        font-size: 14px;
+        color: var(--text-secondary);
+        margin-top: 4px;
+      }
+
+      .history-content {
+        background: var(--bg-primary);
+        border-radius: 12px;
+        box-shadow: var(--shadow);
+        overflow: auto;
+        min-width: 0;
+      }
+
+      .loading {
+        text-align: center;
+        padding: 40px;
+        color: var(--text-secondary);
+      }
+
+      .error {
+        background: var(--bg-surface-variant);
+        color: var(--error-color);
+        padding: 20px;
+        border-radius: 8px;
+        margin: 20px 0;
+        border-left: 4px solid var(--error-color);
+      }
+
+      .history-tree {
+        padding: 20px;
+        min-width: 800px;
+        overflow-x: auto;
+      }
+
+      .history-tree ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+
+      .history-item {
+        border-bottom: 1px solid var(--border-light);
+        padding: 8px 0;
+        border-radius: 8px;
+        margin-bottom: 2px;
+        position: relative;
+      }
+
+      .history-item > .item-header {
+        padding: 8px 12px;
+        border-radius: 6px;
+        transition: background-color 0.2s ease;
+        margin: 0 -12px;
+      }
+
+      .history-item > .item-header:hover {
+        background-color: var(--bg-surface-variant);
+      }
+
+      .history-item:last-child {
+        border-bottom: none;
+      }
+
+      /* 最後の子要素のpaddingを0に */
+      .history-item.is-last-child {
+        padding: 0;
+        margin-bottom: 0;
+      }
+
+      /* 最後の子要素内のURLマージンも0に */
+      .history-item.is-last-child .item-url {
+        margin-top: 0;
+        margin-bottom: 0;
+      }
+
+      .item-header {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        min-width: 600px;
+        width: max-content;
+        position: relative;
+      }
+
+      /* 各アイテムのクリック可能領域を明確にする */
+      .item-header {
+        cursor: default;
+      }
+
+      .item-header > .item-title {
+        cursor: pointer;
+      }
+
+      .toggle {
+        cursor: pointer;
+        user-select: none;
+        width: 20px;
+        height: 20px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 4px;
+        font-size: 12px;
+        color: #5f6368;
+        transition: background-color 0.2s;
+      }
+
+      .toggle:hover {
+        background-color: var(--accent-light);
+      }
+
+      .item-favicon {
+        width: 16px;
+        height: 16px;
+        margin-right: 8px;
+        margin-left: 4px;
+        flex-shrink: 0;
+        border-radius: 2px;
+        object-fit: cover;
+        background: var(--bg-surface-variant);
+      }
+
+      .item-title {
+        color: var(--accent-primary);
+        text-decoration: none;
+        font-weight: 500;
+        flex: 1;
+        display: block;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        line-height: 1.4;
+      }
+
+      .item-title:hover {
+        text-decoration: underline;
+      }
+
+      .item-url {
+        font-size: 12px;
+        color: var(--text-tertiary);
+        margin-left: 24px;
+        display: block;
+        margin-top: 2px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        line-height: 1.3;
+      }
+
+      .item-time {
+        font-size: 12px;
+        color: var(--text-secondary);
+        white-space: nowrap;
+        margin-right: 8px;
+        flex-shrink: 0;
+        min-width: 70px;
+        text-align: left;
+      }
+
+      .item-children {
+        margin-left: 28px;
+        padding-left: 16px;
+        margin-top: 4px;
+        margin-bottom: 0px;
+        position: relative;
+      }
+
+      /* デバッグ用：ツリーIDの表示スタイル */
+      .tree-id-debug {
+        font-family: monospace;
+        background: rgba(0,0,0,0.1);
+        padding: 2px 4px;
+        border-radius: 3px;
+        font-size: 10px !important;
+        color: #666 !important;
+      }
+
+      /* 各子要素の設定 */
+      .item-children > ul {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .item-children > ul > li {
+        position: relative;
+        margin-bottom: 2px;
+      }
+
+      /* 最後の子要素の下余白を削除 */
+      .item-children > ul > li:last-child {
+        margin-bottom: 0px;
+      }
+
+      .item-children.collapsed {
+        display: none;
+      }
+
+      /* 子要素のホバー効果 */
+      .item-children .history-item {
+        margin-bottom: 1px;
+        padding: 4px 0;
+      }
+
+      .item-children .history-item > .item-header {
+        margin: 0 -12px;
+        padding: 6px 12px;
+        border-radius: 4px;
+        transition: background-color 0.2s ease;
+      }
+
+      .item-children .history-item > .item-header:hover {
+        background-color: var(--bg-surface-variant);
+      }
+
+      /* カスタムスクロールバー */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+
+      ::-webkit-scrollbar-track {
+        background: var(--bg-surface-variant);
+        border-radius: 4px;
+      }
+
+      ::-webkit-scrollbar-thumb {
+        background: var(--border-color);
+        border-radius: 4px;
+        transition: background-color 0.2s ease;
+      }
+
+      ::-webkit-scrollbar-thumb:hover {
+        background: var(--text-secondary);
+      }
+
+      /* Firefox用スクロールバー */
+      * {
+        scrollbar-width: thin;
+        scrollbar-color: var(--border-color) var(--bg-surface-variant);
+      }
+
+      .search-box {
+        width: 300px;
+        max-width: 100%;
+      }
+
+      /* レスポンシブデザイン - 横スクロール対応 */
+      @media (max-width: 768px) {
+        .container {
+          padding: 10px;
+          min-width: 800px;
+        }
+
+        .header {
+          padding: 10px;
+          min-width: 800px;
+        }
+
+        .history-tree {
+          padding: 10px;
+          min-width: 800px;
+        }
+      }
+
+      @media (max-width: 768px) {
+        .container {
+          min-width: 320px;
+          padding: 10px;
+        }
+
+        .controls {
+          flex-direction: column;
+          align-items: stretch;
+        }
+
+        .control-group {
+          justify-content: space-between;
+        }
+
+        .search-box {
+          width: 100%;
+        }
+
+        .stats {
+          grid-template-columns: 1fr;
+        }
+
+        .item-header {
+          flex-wrap: wrap;
+          align-items: flex-start;
+        }
+
+        .item-time {
+          margin-left: 0;
+          margin-top: 4px;
+          order: 3;
+          width: 100%;
+        }
+
+        .item-title {
+          order: 1;
+          margin-bottom: 4px;
+        }
+
+        .history-tree {
+          padding: 10px;
+        }
+
+        /* モバイルではタップでのハイライト効果を調整 */
+        .history-item > .item-header:active {
+          background-color: var(--bg-surface-variant);
+        }
+
+        .item-children .history-item > .item-header:active {
+          background-color: var(--bg-surface-variant);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h1>履歴ツリー</h1>
+        <button id="themeToggle" style="background: transparent; color: var(--text-primary); border: 1px solid var(--border-color); padding: 8px; border-radius: 50%; font-size: 16px; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center;">
+          🌙
+        </button>
+      </div>
+      <div class="controls">
+        <div class="control-group">
+          <label for="days">期間:</label>
+          <select id="days">
+            <option value="1">1日</option>
+            <option value="3">3日</option>
+            <option value="7" selected>1週間</option>
+            <option value="30">1ヶ月</option>
+            <option value="90">3ヶ月</option>
+          </select>
+        </div>
+        <div class="control-group">
+          <label for="maxResults">最大件数:</label>
+          <select id="maxResults">
+            <option value="100">100</option>
+            <option value="500" selected>500</option>
+            <option value="1000">1000</option>
+            <option value="2000">2000</option>
+          </select>
+        </div>
+        <div class="control-group">
+          <label for="search">検索:</label>
+          <input type="text" id="search" class="search-box" placeholder="タイトルやURLで検索...">
+        </div>
+        <button id="refresh">更新</button>
+      </div>
+    </div>
+
+    <div class="container">
+      <div class="stats" id="stats" style="display: none;">
+        <div class="stat-item">
+          <div class="stat-value" id="totalSites">0</div>
+          <div class="stat-label">サイト数</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="totalVisits">0</div>
+          <div class="stat-label">総訪問数</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="todayVisits">0</div>
+          <div class="stat-label">今日の訪問</div>
+        </div>
+      </div>
+
+      <div class="history-content">
+        <div id="loading" class="loading">
+          <div>履歴を読み込み中...</div>
+        </div>
+        <div id="error" style="display: none;"></div>
+        <div id="tree" class="history-tree" style="display: none;"></div>
+      </div>
+    </div>
+
+    <script src="history.js"></script>
+  </body>
+</html>
