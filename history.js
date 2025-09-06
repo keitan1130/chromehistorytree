@@ -101,12 +101,14 @@ class HistoryManager {
     const loadingElement = document.getElementById('loading');
     const errorElement = document.getElementById('error');
     const treeElement = document.getElementById('tree');
-    const statsElement = document.getElementById('stats');
+    const statsInlineElement = document.getElementById('statsInline');
 
     loadingElement.style.display = 'block';
     errorElement.style.display = 'none';
     treeElement.style.display = 'none';
-    statsElement.style.display = 'none';
+    if (statsInlineElement) {
+      statsInlineElement.style.display = 'none';
+    }
 
     try {
       const days = parseInt(document.getElementById('days').value);
@@ -120,7 +122,9 @@ class HistoryManager {
 
       loadingElement.style.display = 'none';
       treeElement.style.display = 'block';
-      statsElement.style.display = 'grid';
+      if (statsInlineElement) {
+        statsInlineElement.style.display = 'flex';
+      }
 
     } catch (error) {
       loadingElement.style.display = 'none';
@@ -334,9 +338,11 @@ class HistoryManager {
       todayVisits: todayCount
     };
 
-    document.getElementById('totalSites').textContent = this.stats.totalSites;
-    document.getElementById('totalVisits').textContent = this.stats.totalVisits;
-    document.getElementById('todayVisits').textContent = this.stats.todayVisits;
+    // インライン統計を更新
+    const todayVisitsInline = document.getElementById('todayVisitsInline');
+    if (todayVisitsInline) {
+      todayVisitsInline.textContent = this.stats.todayVisits;
+    }
   }
 
   filterAndRenderData() {

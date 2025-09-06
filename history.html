@@ -60,7 +60,6 @@
         background: var(--bg-primary);
         color: var(--text-primary);
         line-height: 1.5;
-        min-width: 800px;
         overflow-x: auto;
       }
 
@@ -69,7 +68,6 @@
         border-bottom: 1px solid var(--border-color);
         padding: 20px;
         box-shadow: var(--shadow);
-        min-width: 800px;
         overflow-x: auto;
       }
 
@@ -85,6 +83,7 @@
         gap: 15px;
         align-items: center;
         flex-wrap: wrap;
+        justify-content: flex-start;
       }
 
       .control-group {
@@ -135,6 +134,7 @@
         width: 100%;
         margin: 0 auto;
         padding: 20px;
+        max-width: none;
       }
 
       .stats {
@@ -143,25 +143,52 @@
         border-radius: 12px;
         box-shadow: var(--shadow);
         margin-bottom: 20px;
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        display: flex;
+        flex-wrap: wrap;
         gap: 20px;
+        align-items: flex-start;
+        justify-content: flex-start;
+      }
+
+      .stats-inline {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-left: 20px;
+        padding: 8px 16px;
+        background: var(--bg-surface-variant);
+        border-radius: 8px;
+        border: 1px solid var(--border-color);
       }
 
       .stat-item {
-        text-align: center;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 0;
+        flex: 0 0 auto;
       }
 
       .stat-value {
         font-size: 28px;
         font-weight: 700;
         color: var(--accent-primary);
+        min-width: 0;
+      }
+
+      .stats-inline .stat-value {
+        font-size: 18px;
+        font-weight: 600;
       }
 
       .stat-label {
         font-size: 14px;
         color: var(--text-secondary);
-        margin-top: 4px;
+        white-space: nowrap;
+      }
+
+      .stats-inline .stat-label {
+        font-size: 12px;
       }
 
       .history-content {
@@ -189,7 +216,6 @@
 
       .history-tree {
         padding: 20px;
-        min-width: 800px;
         overflow-x: auto;
       }
 
@@ -226,9 +252,10 @@
         display: flex;
         align-items: flex-start;
         gap: 8px;
-        min-width: 600px;
         width: max-content;
         position: relative;
+        flex-wrap: nowrap;
+        min-width: 0;
       }
 
       /* 各アイテムのクリック可能領域を明確にする */
@@ -304,8 +331,11 @@
         white-space: nowrap;
         margin-right: 8px;
         flex-shrink: 0;
-        min-width: 70px;
+        min-width: 80px;
+        width: 80px;
         text-align: left;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
       .item-children {
@@ -397,23 +427,19 @@
       @media (max-width: 768px) {
         .container {
           padding: 10px;
-          min-width: 800px;
         }
 
         .header {
           padding: 10px;
-          min-width: 800px;
         }
 
         .history-tree {
           padding: 10px;
-          min-width: 800px;
         }
       }
 
       @media (max-width: 768px) {
         .container {
-          min-width: 320px;
           padding: 10px;
         }
 
@@ -430,25 +456,28 @@
           width: 100%;
         }
 
-        .stats {
-          grid-template-columns: 1fr;
+        .stats-inline {
+          margin-left: 0;
+          align-self: center;
+          margin-top: 10px;
         }
 
         .item-header {
-          flex-wrap: wrap;
           align-items: flex-start;
+          flex-wrap: nowrap;
         }
 
         .item-time {
           margin-left: 0;
-          margin-top: 4px;
-          order: 3;
-          width: 100%;
+          width: 80px;
+          min-width: 80px;
+          flex-shrink: 0;
         }
 
         .item-title {
-          order: 1;
-          margin-bottom: 4px;
+          margin-left: 8px;
+          min-width: 0;
+          flex: 1;
         }
 
         .history-tree {
@@ -499,25 +528,16 @@
           <input type="text" id="search" class="search-box" placeholder="タイトルやURLで検索...">
         </div>
         <button id="refresh">更新</button>
+        <div class="stats-inline" id="statsInline" style="display: none;">
+          <div class="stat-item">
+            <div class="stat-value" id="todayVisitsInline">0</div>
+            <div class="stat-label">今日の訪問</div>
+          </div>
+        </div>
       </div>
     </div>
 
     <div class="container">
-      <div class="stats" id="stats" style="display: none;">
-        <div class="stat-item">
-          <div class="stat-value" id="totalSites">0</div>
-          <div class="stat-label">サイト数</div>
-        </div>
-        <div class="stat-item">
-          <div class="stat-value" id="totalVisits">0</div>
-          <div class="stat-label">総訪問数</div>
-        </div>
-        <div class="stat-item">
-          <div class="stat-value" id="todayVisits">0</div>
-          <div class="stat-label">今日の訪問</div>
-        </div>
-      </div>
-
       <div class="history-content">
         <div id="loading" class="loading">
           <div>履歴を読み込み中...</div>
