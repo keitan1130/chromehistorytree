@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' data: https://www.google.com https:; img-src 'self' data: https: chrome://favicon/; connect-src 'self' https:;" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' data: https://www.google.com https:; img-src 'self' data: https: chrome://favicon/; connect-src 'self' https:" />
     <title>履歴ツリー - History Tree</title>
     <style>
       :root {
@@ -201,7 +201,7 @@
 
       .history-item {
         border-bottom: 1px solid var(--border-light);
-        padding: 8px 0;
+        padding-top: 8px 0;
         border-radius: 8px;
         margin-bottom: 2px;
         position: relative;
@@ -220,18 +220,6 @@
 
       .history-item:last-child {
         border-bottom: none;
-      }
-
-      /* 最後の子要素のpaddingを0に */
-      .history-item.is-last-child {
-        padding: 0;
-        margin-bottom: 0;
-      }
-
-      /* 最後の子要素内のURLマージンも0に */
-      .history-item.is-last-child .item-url {
-        margin-top: 0;
-        margin-bottom: 0;
       }
 
       .item-header {
@@ -333,43 +321,44 @@
         position: relative;
       }
 
+      /* 親から最初の子への縦線 - 親のtoggleの中央下から子1のtoggleの中央まで */
       .item-children > ul::before {
         content: '';
         position: absolute;
-        left: -16px;
-        top: 0;
-        bottom: 0;
+        left: -35px;
+        top: -25px;
+        height: 45px;
         border-left: 1px solid var(--border-color);
+        z-index: 0;
       }
 
-      /* 最後の子要素では縦線を途中で止める */
-      .item-children > ul > li:last-child::after {
-        content: '';
-        position: absolute;
-        left: -16px;
-        top: 50%;
-        bottom: -100px; /* 十分な高さで下まで隠す */
-        background: var(--bg-primary);
-        width: 1px;
-        z-index: 1;
-      }
-
-      /* 各子要素に横線を追加 */
+      /* 各子要素の配置設定 */
       .item-children > ul > li {
         position: relative;
         margin-bottom: 2px;
       }
 
+      /* 横線: 縦棒からtoggleの中央まで */
       .item-children > ul > li::before {
         content: '';
         position: absolute;
-        left: -16px;
-        top: 50%;
-        transform: translateY(-50%);
-        width: 15px;
+        left: -35px;
+        top: 20px;
+        width: 35px;
         height: 1px;
         background: var(--border-color);
         z-index: 2;
+      }
+
+      /* 縦線: 各toggleの中央から次のtoggleの中央まで (n→n+1) */
+      .item-children > ul > li:not(.is-last-child)::after {
+        content: '';
+        position: absolute;
+        left: -6px; /* toggleの中央位置 */
+        top: 18px; /* 現在のtoggleの中央 */
+        height: calc(100% + 2px); /* 次の要素のtoggle中央まで */
+        border-left: 1px solid var(--border-color);
+        z-index: 0;
       }
 
       /* デバッグ用：ツリーIDの表示スタイル */

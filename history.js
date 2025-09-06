@@ -385,11 +385,12 @@ class HistoryManager {
       const node = nodes[i];
       const treeId = `${i + 1}`;  // 1, 2, 3...
       const isLast = i === nodes.length - 1;
-      ul.appendChild(this.createHistoryItem(node, treeId, isLast));
+      const isFirst = i === 0;
+      ul.appendChild(this.createHistoryItem(node, treeId, isLast, isFirst));
     }
   }
 
-  createHistoryItem(node, treeId, isLast = false) {
+  createHistoryItem(node, treeId, isLast = false, isFirst = false) {
     const li = document.createElement('li');
     li.className = 'history-item';
 
@@ -400,6 +401,16 @@ class HistoryManager {
     // 最後の子要素かどうかのクラスを追加
     if (isLast) {
       li.classList.add('is-last-child');
+    }
+
+    // 最初の子要素かどうかのクラスを追加
+    if (isFirst) {
+      li.classList.add('is-first-child');
+    }
+
+    // 子要素がある場合のクラス追加
+    if (node.children.length > 0) {
+      li.classList.add('has-children');
     }
 
     // メインアイテムのヘッダー
@@ -495,7 +506,8 @@ class HistoryManager {
         const child = node.children[i];
         const childTreeId = `${treeId}-${i + 1}`;  // 1-1, 1-2, 2-1, 2-2-1...
         const isChildLast = i === node.children.length - 1;
-        const childLi = this.createHistoryItem(child, childTreeId, isChildLast);
+        const isChildFirst = i === 0;
+        const childLi = this.createHistoryItem(child, childTreeId, isChildLast, isChildFirst);
         childUl.appendChild(childLi);
       }
       childrenContainer.appendChild(childUl);
