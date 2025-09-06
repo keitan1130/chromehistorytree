@@ -195,6 +195,63 @@
         font-size: 12px;
       }
 
+      .pagination-controls {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 15px 20px;
+        background: var(--bg-surface-variant);
+        border-radius: 8px;
+        margin-bottom: 15px;
+        border: 1px solid var(--border-light);
+      }
+
+      .pagination-group {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .pagination-group label {
+        font-weight: 500;
+        color: var(--text-secondary);
+        font-size: 14px;
+      }
+
+      .pagination-group input {
+        text-align: center;
+        font-weight: 600;
+      }
+
+      .pagination-group span {
+        font-size: 14px;
+        color: var(--text-secondary);
+        font-weight: 500;
+      }
+
+      .search-range {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .range-label {
+        font-size: 14px;
+        color: var(--text-secondary);
+        font-weight: 500;
+      }
+
+      .range-time {
+        font-size: 13px;
+        color: var(--text-primary);
+        background: var(--bg-primary);
+        padding: 4px 8px;
+        border-radius: 4px;
+        border: 1px solid var(--border-color);
+        font-family: monospace;
+        white-space: nowrap;
+      }
+
       .history-content {
         background: var(--bg-primary);
         border-radius: 12px;
@@ -473,6 +530,16 @@
           margin-top: 10px;
         }
 
+        .pagination-controls {
+          flex-direction: column;
+          gap: 10px;
+          text-align: center;
+        }
+
+        .search-range {
+          justify-content: center;
+        }
+
         .item-header {
           align-items: flex-start;
           flex-wrap: nowrap;
@@ -534,12 +601,38 @@
     </div>
 
     <div class="container">
+      <!-- 上部のページネーション -->
+      <div class="pagination-controls">
+        <div class="pagination-group">
+          <label for="pageTopInput">ページ:</label>
+          <input type="number" id="pageTopInput" value="1" min="1" step="1" style="width: 60px;">
+          <span id="pageTopInfo"></span>
+        </div>
+        <div class="search-range">
+          <span class="range-label">検索範囲:</span>
+          <span id="searchRangeTop" class="range-time">-</span>
+        </div>
+      </div>
+
       <div class="history-content">
         <div id="loading" class="loading">
           <div>履歴を読み込み中...</div>
         </div>
         <div id="error" style="display: none;"></div>
         <div id="tree" class="history-tree" style="display: none;"></div>
+      </div>
+
+      <!-- 下部のページネーション -->
+      <div class="pagination-controls">
+        <div class="pagination-group">
+          <label for="pageBottomInput">ページ:</label>
+          <input type="number" id="pageBottomInput" value="1" min="1" step="1" style="width: 60px;">
+          <span id="pageBottomInfo"></span>
+        </div>
+        <div class="search-range">
+          <span class="range-label">検索範囲:</span>
+          <span id="searchRangeBottom" class="range-time">-</span>
+        </div>
       </div>
     </div>
 

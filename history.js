@@ -16,6 +16,10 @@ class HistoryManager {
     this.currentSearchTerm = '';
     this.isDarkMode = this.getPreferredTheme();
     this.daysInputTimeout = null; // 入力遅延タイマー
+    this.currentPage = 1;
+    this.daysPerPage = 7; // デフォルト値、period inputから取得
+    this.searchStartTime = null;
+    this.searchEndTime = null;
     this.stats = {
       totalSites: 0,
       totalVisits: 0,
@@ -54,7 +58,7 @@ class HistoryManager {
 
   initializeEventListeners() {
     document.getElementById('refresh').addEventListener('click', () => {
-      this.loadHistory();
+      this.loadHistoryForCurrentPage();
     });
 
     document.getElementById('days').addEventListener('input', () => {
@@ -63,17 +67,33 @@ class HistoryManager {
       const value = parseInt(daysInput.value);
 
       if (value && value > 0 && value <= 365) {
+        this.daysPerPage = value;
+        this.currentPage = 1; // 期間変更時はページを1に戻す
+
         // 有効な値の場合のみ更新（500ms後に自動更新）
         clearTimeout(this.daysInputTimeout);
         this.daysInputTimeout = setTimeout(() => {
-          this.loadHistory();
+          this.loadHistoryForCurrentPage();
         }, 500);
       }
     });
 
     document.getElementById('search').addEventListener('input', (e) => {
       this.currentSearchTerm = e.target.value.toLowerCase();
+      this.currentPage = 1; // 検索時はページを1に戻す
       this.filterAndRenderData();
+    });
+
+    // ページネーションのイベントリスナー
+    ['pageTopInput', 'pageBottomInput'].forEach(id => {
+      document.getElementById(id).addEventListener('input', (e) => {
+        const pageValue = parseInt(e.target.value);
+        if (pageValue && pageValue > 0) {
+          this.currentPage = pageValue;
+          this.updatePageInputs();
+          this.loadHistoryForCurrentPage();
+        }
+      });
     });    // テーマ切り替えボタンのイベントリスナー
     const themeToggle = document.getElementById('themeToggle');
     if (themeToggle) {
@@ -102,7 +122,7 @@ class HistoryManager {
     }
   }
 
-  async loadHistory() {
+  async loadHistoryForCurrentPage() {
     const loadingElement = document.getElementById('loading');
     const errorElement = document.getElementById('error');
     const treeElement = document.getElementById('tree');
@@ -116,9 +136,22 @@ class HistoryManager {
     }
 
     try {
-      const days = parseInt(document.getElementById('days').value);
+      const daysPerPage = this.daysPerPage;
+      const currentPage = this.currentPage;
 
-      const roots = await this.buildHistoryTree({ days });
+      // 現在のページに対応する期間を計算
+      const endDaysAgo = (currentPage - 1) * daysPerPage;
+      const startDaysAgo = currentPage * daysPerPage;
+
+      // 時刻を計算（ミリ秒）
+      const now = Date.now();
+      this.searchEndTime = now - (endDaysAgo * 24 * 60 * 60 * 1000);
+      this.searchStartTime = now - (startDaysAgo * 24 * 60 * 60 * 1000);
+
+      const roots = await this.buildHistoryTree({
+        startTime: this.searchStartTime,
+        endTime: this.searchEndTime
+      });
       this.filteredData = roots;
 
       this.calculateStats();
@@ -135,10 +168,14 @@ class HistoryManager {
       errorElement.style.display = 'block';
       errorElement.innerHTML = `<strong>エラー:</strong> 履歴の取得に失敗しました。<br>${error.message}`;
     }
-  }
+  }  async buildHistoryTree({ startTime, endTime } = {}) {
+    // デフォルト値の設定（後方互換性のため）
+    if (!startTime || !endTime) {
+      const days = 7;
+      endTime = Date.now();
+      startTime = endTime - days * 24 * 60 * 60 * 1000;
+    }
 
-  async buildHistoryTree({ days = 7 } = {}) {
-    const startTime = Date.now() - days * 24 * 60 * 60 * 1000;
     const items = await historySearch({ text: '', startTime, maxResults: 10000 });
 
     // すべての訪問情報を収集
@@ -150,8 +187,8 @@ class HistoryManager {
       urlSet.add(item.url);
 
       for (const visit of visits) {
-        // startTime以降の訪問のみを含める
-        if (visit.visitTime >= startTime) {
+        // startTime以降、endTime以前の訪問のみを含める
+        if (visit.visitTime >= startTime && visit.visitTime <= endTime) {
           this.allVisits.push({
             visitId: visit.visitId,
             url: item.url,
@@ -254,6 +291,32 @@ class HistoryManager {
     return cleanedRoots;
   }
 
+  // ページネーション関連のメソッド
+  updatePageInputs() {
+    ['pageTopInput', 'pageBottomInput'].forEach(id => {
+      document.getElementById(id).value = this.currentPage;
+    });
+
+    // ページ上限は無いので、単純に現在ページを表示
+    ['pageTopInfo', 'pageBottomInfo'].forEach(id => {
+      document.getElementById(id).textContent = '';
+    });
+  }  updateSearchRange() {
+    const startTime = this.searchStartTime;
+    const endTime = this.searchEndTime;
+
+    let rangeText = '-';
+    if (startTime && endTime) {
+      const startDate = new Date(startTime);
+      const endDate = new Date(endTime);
+      rangeText = `${this.formatTime(endDate)} ～ ${this.formatTime(startDate)}`;
+    }
+
+    ['searchRangeTop', 'searchRangeBottom'].forEach(id => {
+      document.getElementById(id).textContent = rangeText;
+    });
+  }
+
   // 親と子が同じURL/タイトルの場合、重複する子を削除し孫を親に移す
   removeDuplicateNodes(nodes) {
     let removedCount = 0;
@@ -350,17 +413,20 @@ class HistoryManager {
   }
 
   filterAndRenderData() {
+    let dataToRender;
+
     if (!this.currentSearchTerm) {
-      this.renderTree(this.filteredData);
-      return;
+      dataToRender = this.filteredData;
+    } else {
+      // 検索フィルター適用
+      dataToRender = this.filterTree(this.filteredData, this.currentSearchTerm);
     }
 
-    // 検索フィルター適用
-    const filteredRoots = this.filterTree(this.filteredData, this.currentSearchTerm);
-    this.renderTree(filteredRoots);
-  }
-
-  filterTree(nodes, searchTerm) {
+    // データをそのまま表示（ページネーションは時間範囲で行う）
+    this.renderTree(dataToRender);
+    this.updatePageInputs();
+    this.updateSearchRange();
+  }  filterTree(nodes, searchTerm) {
     const filtered = [];
 
     for (const node of nodes) {
@@ -542,5 +608,5 @@ class HistoryManager {
 // 初期化
 document.addEventListener('DOMContentLoaded', () => {
   const historyManager = new HistoryManager();
-  historyManager.loadHistory();
+  historyManager.loadHistoryForCurrentPage();
 });
