@@ -329,6 +329,50 @@
         position: relative;
       }
 
+      /* 親要素のすぐ下の子要素リストに縦線を描画 */
+      .item-children > ul {
+        position: relative;
+      }
+
+      .item-children > ul::before {
+        content: '';
+        position: absolute;
+        left: -16px;
+        top: 0;
+        bottom: 0;
+        border-left: 1px solid var(--border-color);
+      }
+
+      /* 最後の子要素では縦線を途中で止める */
+      .item-children > ul > li:last-child::after {
+        content: '';
+        position: absolute;
+        left: -16px;
+        top: 50%;
+        bottom: -100px; /* 十分な高さで下まで隠す */
+        background: var(--bg-primary);
+        width: 1px;
+        z-index: 1;
+      }
+
+      /* 各子要素に横線を追加 */
+      .item-children > ul > li {
+        position: relative;
+        margin-bottom: 2px;
+      }
+
+      .item-children > ul > li::before {
+        content: '';
+        position: absolute;
+        left: -16px;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 15px;
+        height: 1px;
+        background: var(--border-color);
+        z-index: 2;
+      }
+
       /* デバッグ用：ツリーIDの表示スタイル */
       .tree-id-debug {
         font-family: monospace;
@@ -344,11 +388,6 @@
         margin: 0;
         padding: 0;
         list-style: none;
-      }
-
-      .item-children > ul > li {
-        position: relative;
-        margin-bottom: 2px;
       }
 
       /* 最後の子要素の下余白を削除 */
