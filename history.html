@@ -591,6 +591,13 @@
           <input type="text" id="search" class="search-box" placeholder="タイトルやURLで検索...">
         </div>
         <button id="refresh">更新</button>
+        <div class="control-group">
+          <label for="viewMode">表示モード:</label>
+          <select id="viewMode">
+            <option value="chronological" selected>時系列</option>
+            <option value="aggregated">集計</option>
+          </select>
+        </div>
         <div class="stats-inline" id="statsInline" style="display: none;">
           <div class="stat-item">
             <div class="stat-value" id="historyCount">0</div>

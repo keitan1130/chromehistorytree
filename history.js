@@ -20,6 +20,7 @@ class HistoryManager {
     this.daysPerPage = 7; // デフォルト値、period inputから取得
     this.searchStartTime = null;
     this.searchEndTime = null;
+    this.viewMode = 'chronological'; // 'chronological' or 'aggregated'
     this.stats = {
       totalSites: 0,
       totalVisits: 0,
@@ -94,6 +95,12 @@ class HistoryManager {
           this.loadHistoryForCurrentPage();
         }
       });
+    });
+
+    // モード切り替えのイベントリスナー
+    document.getElementById('viewMode').addEventListener('change', (e) => {
+      this.viewMode = e.target.value;
+      this.filterAndRenderData(); // 現在のデータを新しいモードで再描画
     });    // テーマ切り替えボタンのイベントリスナー
     const themeToggle = document.getElementById('themeToggle');
     if (themeToggle) {
@@ -291,6 +298,201 @@ class HistoryManager {
     return cleanedRoots;
   }
 
+  // 集計モード: 同じURLを集約して最適なツリーを作成
+  buildAggregatedTree() {
+    // URLごとの訪問情報を集約
+    const urlVisitMap = new Map();
+    const urlTransitions = new Map(); // URL間の遷移関係を記録
+
+    // 各訪問を処理してURL間の関係を構築
+    for (const visit of this.allVisits) {
+      const url = visit.url;
+
+      // URLの訪問情報を集約
+      if (!urlVisitMap.has(url)) {
+        urlVisitMap.set(url, {
+          url: visit.url,
+          title: visit.title,
+          favicon: visit.favicon,
+          visits: [],
+          firstVisitTime: visit.visitTime,
+          lastVisitTime: visit.visitTime,
+          visitCount: 0
+        });
+      }
+
+      const urlInfo = urlVisitMap.get(url);
+      urlInfo.visits.push(visit);
+      urlInfo.visitCount++;
+      urlInfo.firstVisitTime = Math.min(urlInfo.firstVisitTime, visit.visitTime);
+      urlInfo.lastVisitTime = Math.max(urlInfo.lastVisitTime, visit.visitTime);
+    }
+
+    // URL間の遷移関係を構築
+    for (const visit of this.allVisits) {
+      if (visit.referringVisitId) {
+        // 参照元の訪問を見つける
+        const referringVisit = this.allVisits.find(v => v.visitId === visit.referringVisitId);
+        if (referringVisit && referringVisit.url !== visit.url) {
+          const fromUrl = referringVisit.url;
+          const toUrl = visit.url;
+
+          if (!urlTransitions.has(fromUrl)) {
+            urlTransitions.set(fromUrl, new Map());
+          }
+
+          const fromTransitions = urlTransitions.get(fromUrl);
+          if (!fromTransitions.has(toUrl)) {
+            fromTransitions.set(toUrl, {
+              count: 0,
+              firstTime: visit.visitTime,
+              lastTime: visit.visitTime
+            });
+          }
+
+          const transition = fromTransitions.get(toUrl);
+          transition.count++;
+          transition.firstTime = Math.min(transition.firstTime, visit.visitTime);
+          transition.lastTime = Math.max(transition.lastTime, visit.visitTime);
+        }
+      }
+    }
+
+    // 集約されたツリーを構築
+    const aggregatedNodes = this.buildOptimalTree(urlVisitMap, urlTransitions);
+    return aggregatedNodes;
+  }
+
+  // 最適なツリー構造を構築
+  buildOptimalTree(urlVisitMap, urlTransitions) {
+    const nodes = new Map();
+    const childToParent = new Map(); // 子→親の関係を記録
+    const parentToChildren = new Map(); // 親→子の関係を記録
+
+    // 各URLのノードを作成
+    for (const [url, urlInfo] of urlVisitMap) {
+      nodes.set(url, {
+        url: urlInfo.url,
+        title: urlInfo.title,
+        favicon: urlInfo.favicon,
+        visitTime: urlInfo.lastVisitTime, // 表示用は最後の訪問時間
+        visitCount: urlInfo.visitCount,
+        children: []
+      });
+      parentToChildren.set(url, []);
+    }
+
+    // 全ての遷移関係を分析して最適な親子関係を決定
+    const allTransitions = [];
+    for (const [fromUrl, transitions] of urlTransitions) {
+      for (const [toUrl, transitionInfo] of transitions) {
+        allTransitions.push({
+          from: fromUrl,
+          to: toUrl,
+          count: transitionInfo.count,
+          firstTime: transitionInfo.firstTime,
+          lastTime: transitionInfo.lastTime
+        });
+      }
+    }
+
+    // 遷移を優先度順にソート（回数多い順、同じなら早い順）
+    allTransitions.sort((a, b) => {
+      if (b.count !== a.count) {
+        return b.count - a.count; // 回数の多い順
+      }
+      return a.firstTime - b.firstTime; // 時間の早い順
+    });
+
+    // 循環参照を避けながら最適な親子関係を構築
+    for (const transition of allTransitions) {
+      const { from, to, count } = transition;
+
+      // 既に親子関係が逆向きに存在しないか確認
+      if (!this.wouldCreateCycle(from, to, childToParent)) {
+        // 子が既に他の親を持っていない場合、または現在の関係の方が強い場合
+        const currentParent = childToParent.get(to);
+        if (!currentParent || this.shouldReplaceParent(from, currentParent, to, urlTransitions)) {
+          // 既存の親子関係を削除
+          if (currentParent) {
+            const currentParentChildren = parentToChildren.get(currentParent);
+            const index = currentParentChildren.indexOf(to);
+            if (index > -1) {
+              currentParentChildren.splice(index, 1);
+            }
+          }
+
+          // 新しい親子関係を設定
+          childToParent.set(to, from);
+          parentToChildren.get(from).push(to);
+        }
+      }
+    }
+
+    // ノードに子要素を設定
+    for (const [parentUrl, childUrls] of parentToChildren) {
+      const parentNode = nodes.get(parentUrl);
+      if (parentNode) {
+        // 子ノードを追加（訪問回数順、同じなら時間順）
+        const childNodes = childUrls
+          .map(childUrl => nodes.get(childUrl))
+          .filter(child => child)
+          .sort((a, b) => {
+            const aTransition = urlTransitions.get(parentUrl)?.get(a.url);
+            const bTransition = urlTransitions.get(parentUrl)?.get(b.url);
+
+            if (aTransition && bTransition) {
+              if (bTransition.count !== aTransition.count) {
+                return bTransition.count - aTransition.count;
+              }
+              return aTransition.firstTime - bTransition.firstTime;
+            }
+            return b.visitTime - a.visitTime;
+          });
+
+        parentNode.children = childNodes;
+      }
+    }
+
+    // ルートノード（親を持たない）を取得
+    const rootUrls = Array.from(nodes.keys()).filter(url => !childToParent.has(url));
+    const rootNodes = rootUrls
+      .map(url => nodes.get(url))
+      .sort((a, b) => b.visitTime - a.visitTime); // 時間順（新しい順）
+
+    return rootNodes;
+  }
+
+  // 循環参照チェック
+  wouldCreateCycle(from, to, childToParent) {
+    let current = from;
+    while (current) {
+      if (current === to) {
+        return true; // 循環が発生する
+      }
+      current = childToParent.get(current);
+    }
+    return false;
+  }
+
+  // より強い親子関係かどうか判定
+  shouldReplaceParent(newParent, currentParent, child, urlTransitions) {
+    const newTransition = urlTransitions.get(newParent)?.get(child);
+    const currentTransition = urlTransitions.get(currentParent)?.get(child);
+
+    if (!newTransition || !currentTransition) {
+      return !!newTransition; // 新しい遷移が存在すれば置き換え
+    }
+
+    // 遷移回数で比較
+    if (newTransition.count !== currentTransition.count) {
+      return newTransition.count > currentTransition.count;
+    }
+
+    // 同じ回数なら時間で比較（早い方を優先）
+    return newTransition.firstTime < currentTransition.firstTime;
+  }
+
   // ページネーション関連のメソッド
   updatePageInputs() {
     ['pageTopInput', 'pageBottomInput'].forEach(id => {
@@ -415,11 +617,23 @@ class HistoryManager {
   filterAndRenderData() {
     let dataToRender;
 
-    if (!this.currentSearchTerm) {
-      dataToRender = this.filteredData;
+    // モードに応じてデータ構造を決定
+    if (this.viewMode === 'aggregated') {
+      // 集計モード：同じURLを集約したツリーを構築
+      const aggregatedData = this.buildAggregatedTree();
+
+      if (!this.currentSearchTerm) {
+        dataToRender = aggregatedData;
+      } else {
+        dataToRender = this.filterTree(aggregatedData, this.currentSearchTerm);
+      }
     } else {
-      // 検索フィルター適用
-      dataToRender = this.filterTree(this.filteredData, this.currentSearchTerm);
+      // 時系列モード：従来の処理
+      if (!this.currentSearchTerm) {
+        dataToRender = this.filteredData;
+      } else {
+        dataToRender = this.filterTree(this.filteredData, this.currentSearchTerm);
+      }
     }
 
     // データをそのまま表示（ページネーションは時間範囲で行う）
@@ -557,7 +771,14 @@ class HistoryManager {
     const titleLink = document.createElement('a');
     titleLink.className = 'item-title';
     titleLink.href = node.url;
-    titleLink.textContent = node.title;
+
+    // 集計モードでは訪問回数も表示
+    if (this.viewMode === 'aggregated' && node.visitCount > 1) {
+      titleLink.textContent = `${node.title} (${node.visitCount}回)`;
+    } else {
+      titleLink.textContent = node.title;
+    }
+
     titleLink.target = '_blank';
     header.appendChild(titleLink);
 
