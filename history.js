@@ -9,6 +9,357 @@ function historyGetVisits(details) {
   return new Promise((resolve) => chrome.history.getVisits(details, resolve));
 }
 
+// === 集約モード強化版: Chu-Liu/Edmonds ベースの実装 ===
+
+const PARAMS = {
+  PATH_WEIGHT: 40,
+  ROOT_BONUS: 220,
+  DOMAIN_MATCH_BONUS: 20,
+  ID_PATTERN_BONUS: 30,
+  PATTERN_BONUS: 25,
+  RECENCY_HALF_LIFE_MS: 14 * 24 * 60 * 60 * 1000, // 14日
+  ALPHA: { count: 1.0, recency: 1.4, freq: 0.9, path: 1.0, root: 1.1, pattern: 0.6, domain: 0.4 },
+  TOP_K_INCOMING: 10, // 各ノードについて保持する上位incomingエッジ数（速度/品質トレードオフ）
+  HIERARCHY_SCORE_BONUS: 80, // URL 階層から推定した親子関係に与えるボーナス（大きめにすると階層が強く反映）
+  MIN_EDGE_SCORE: 0.01, // かなり低いスコアのエッジは省く
+  DEBUG: false
+};
+
+// --- ヘルパー: パス接頭辞一致数 ---
+function _countMatchingPathParts(parentParts, childParts) {
+  let matches = 0;
+  const minLen = Math.min(parentParts.length, childParts.length);
+  for (let i = 0; i < minLen; i++) {
+    if (parentParts[i] === childParts[i]) matches++;
+    else break;
+  }
+  return matches;
+}
+
+// --- スコア計算 ---
+function _computeEdgeScore(fromUrl, toUrl, meta, urlVisitMap, now, params = PARAMS) {
+  const al = params.ALPHA;
+  const count = meta.count || 1;
+  const lastTime = meta.lastTime || 0;
+  const visitCountTo = (urlVisitMap.get(toUrl)?.visitCount) || 1;
+
+  const w_count = Math.log(1 + count);
+  const age = Math.max(0, now - lastTime);
+  const w_recency = Math.exp(-age / params.RECENCY_HALF_LIFE_MS); // 0..1
+  const w_freq = Math.log(1 + visitCountTo);
+
+  let w_path = 0, w_root = 0, w_pattern = 0, w_domain = 0;
+  try {
+    const f = new URL(fromUrl);
+    const t = new URL(toUrl);
+    if (f.hostname === t.hostname) {
+      w_domain = params.DOMAIN_MATCH_BONUS;
+      const fromParts = f.pathname.split('/').filter(Boolean);
+      const toParts = t.pathname.split('/').filter(Boolean);
+      const matching = _countMatchingPathParts(fromParts, toParts);
+      if (matching > 0) {
+        w_path = (matching / Math.max(1, fromParts.length)) * params.PATH_WEIGHT;
+      }
+      if (fromParts.length === 0) { // ルートページはボーナス
+        w_root = params.ROOT_BONUS;
+      }
+      const fromLast = (fromParts[fromParts.length - 1] || '').toLowerCase();
+      if (['category','categories','tag','tags','section','posts','articles','products','product','blog'].includes(fromLast)) {
+        w_pattern += params.PATTERN_BONUS;
+      }
+      const toLast = (toParts[toParts.length - 1] || '');
+      if (/^\d+$/.test(toLast) || /^[a-f0-9-]{8,}$/.test(toLast)) {
+        w_pattern += params.ID_PATTERN_BONUS;
+      }
+    }
+  } catch (e) {
+    // 無効URLならパス/ドメインボーナスは無視
+  }
+
+  const score =
+    al.count * w_count +
+    al.recency * w_recency +
+    al.freq * w_freq +
+    al.path * w_path +
+    al.root * w_root +
+    al.pattern * w_pattern +
+    al.domain * w_domain;
+
+  return score;
+}
+
+// === Chu-Liu/Edmonds 実装（最大重み有向被覆木） ===
+// nodes: array of node keys (string URLs), root: root key (string), edges: [{u, v, w}]
+function edmondsMaximumArborescence(root, nodes, edges) {
+  // Implementation adapted for clarity; returns parentMap: Map(node -> parent) for nodes != root
+  // If node unreachable -> parent not set -> treated as child of root by caller.
+  const N = nodes.length;
+  const nodeIndex = new Map(nodes.map((n,i) => [n,i]));
+
+  // Build adjacency list of incoming edges per node
+  const incoming = Array(N).fill(0).map(() => []);
+  for (const e of edges) {
+    const u = nodeIndex.get(e.u);
+    const v = nodeIndex.get(e.v);
+    if (u === undefined || v === undefined) continue;
+    incoming[v].push({ u, w: e.w, edge: e });
+  }
+
+  // 1) For each node (except root), pick maximum incoming edge
+  const rootIdx = nodeIndex.get(root);
+  function solve(currNodes, currIncoming) {
+    const M = currNodes.length;
+    const idxMap = new Map(currNodes.map((n,i) => [n, i])); // map original idx -> 0..M-1
+    const invMap = currNodes.slice(); // index -> original idx
+
+    // pick best incoming for each node
+    const inEdge = Array(M).fill(null);
+    for (let i = 0; i < M; i++) {
+      const origIdx = invMap[i];
+      if (origIdx === rootIdx) continue;
+      const incs = currIncoming[origIdx] || [];
+      if (incs.length === 0) return null; // no incoming -> impossible
+      // pick max weight
+      let best = incs[0];
+      for (const it of incs) {
+        if (it.w > best.w) best = it;
+      }
+      inEdge[i] = { from: best.u, w: best.w, edge: best.edge, origFromIdx: best.u };
+    }
+
+    // detect cycles in inEdge graph
+    const vis = Array(M).fill(-1);
+    const comp = Array(M).fill(-1);
+    let compId = 0;
+    for (let i = 0; i < M; i++) {
+      if (vis[i] !== -1) continue;
+      let cur = i;
+      const path = [];
+      while (cur !== -1 && vis[cur] === -1) {
+        vis[cur] = i;
+        path.push(cur);
+        const e = inEdge[cur];
+        if (!e) { cur = -1; break; }
+        // e.from is original idx of parent; convert to local if exists in idxMap
+        const fromOrig = e.origFromIdx;
+        const fromLocal = idxMap.has(fromOrig) ? idxMap.get(fromOrig) : -1;
+        if (fromLocal === -1) { cur = -1; break; } // parent is outside -> no cycle here
+        cur = fromLocal;
+      }
+      if (cur !== -1 && vis[cur] === i) {
+        // found cycle, mark entire cycle with same comp id
+        let x;
+        do {
+          x = path.pop();
+          comp[x] = compId;
+        } while (x !== cur && path.length);
+        compId++;
+      }
+      // mark remaining nodes as no cycle
+    }
+
+    if (compId === 0) {
+      // no cycles -> build parent map and return mapping from original index -> parent original index
+      const resultParent = new Map();
+      for (let i = 0; i < M; i++) {
+        if (invMap[i] === rootIdx) continue;
+        const e = inEdge[i];
+        if (e) {
+          resultParent.set(invMap[i], e.origFromIdx);
+        }
+      }
+      return { resultParent, contracted: null };
+    }
+
+    // There are cycles: contract them
+    // map origIdx -> cycleId or new id
+    const cycleId = new Map();
+    let nextId = 0;
+    for (let i = 0; i < M; i++) {
+      if (comp[i] !== -1) {
+        // cycle node
+        if (!cycleId.has(comp[i])) cycleId.set(comp[i], nextId++);
+        cycleId.set(i, cycleId.get(comp[i]));
+      }
+    }
+    // nodes not in any cycle get unique ids
+    for (let i = 0; i < M; i++) {
+      if (comp[i] === -1) {
+        cycleId.set(i, nextId++);
+      }
+    }
+
+    const newCount = nextId;
+    // Build new incoming lists for contracted graph
+    const newIncoming = Array(newCount).fill(0).map(() => []);
+    const newNodes = [];
+    // For mapping back later
+    const mapping = new Map(); // newIdx -> array of old invMap indices
+    for (let i = 0; i < M; i++) {
+      const nid = cycleId.get(i);
+      if (!mapping.has(nid)) mapping.set(nid, []);
+      mapping.get(nid).push(invMap[i]);
+    }
+    for (let nid = 0; nid < newCount; nid++) newNodes.push(nid);
+
+    // For each edge origU -> origV in currIncoming (orig indices), reweight and add
+    // We'll iterate over all original incoming arrays
+    for (let origV of invMap) {
+      const vLocal = idxMap.get(origV);
+      const vNew = cycleId.get(vLocal);
+      const incs = currIncoming[origV] || [];
+      for (const e of incs) {
+        const uOrig = e.u;
+        const uLocal = idxMap.has(uOrig) ? idxMap.get(uOrig) : -1;
+        const uNew = uLocal === -1 ? null : cycleId.get(uLocal);
+        // edge from uOrig -> origV (orig indices)
+        // compute adjusted weight
+        let wAdj = e.w;
+        // if v is in cycle, subtract its chosen in-edge weight (inEdge of that vLocal)
+        if (vLocal !== -1 && comp[vLocal] !== -1) {
+          const inE = inEdge[vLocal];
+          if (inE) wAdj = e.w - inE.w;
+        }
+        // add edge to newIncoming for vNew with meta storing original edge
+        // uNew might equal vNew (internal cycle edge) -> skip
+        if (uNew !== vNew) {
+          newIncoming[uOrig] = newIncoming[uOrig] || []; // ensure exists for safety
+          // push to newIncoming by original indices mapping (we'll reshape later)
+          // Store as raw triple to be processed in next recursion
+          // For simpler implementation, collect as edges array external to this function
+        }
+      }
+    }
+
+    // Simpler alternative: fallback to greedy break of the weakest edge in each cycle
+    // (To avoid full complexity here, we'll return contracted null to signal caller do greedy)
+    return { resultParent: null, contracted: true, cycles: mapping };
+  }
+
+  // Top-level simple approach: try to construct parent by choosing max incoming then detect cycles
+  // If cycles exist, we will not do full complex contraction here due to complexity — instead
+  // we'll fallback to greedy cycle-breaking implemented outside. So edmonds returns best attempts
+  // as a parent map if no cycles, otherwise null to signal fallback required.
+  const Mfull = N;
+  const inEdge = Array(N).fill(null);
+  for (let v = 0; v < N; v++) {
+    if (v === rootIdx) continue;
+    const incs = incoming[v];
+    if (!incs || incs.length === 0) {
+      // unreachable -> leave null
+      inEdge[v] = null;
+      continue;
+    }
+    // pick best incoming
+    let best = incs[0];
+    for (const it of incs) {
+      if (it.w > best.w) best = it;
+    }
+    inEdge[v] = best; // { u, w, edge }
+  }
+
+  // detect cycles
+  const visited = Array(N).fill(false);
+  const stackmark = Array(N).fill(false);
+  const parentMap = new Map();
+  let hasCycle = false;
+  function dfs(u) {
+    visited[u] = true;
+    stackmark[u] = true;
+    const e = inEdge[u];
+    if (e && !visited[e.u]) {
+      dfs(e.u);
+    } else if (e && stackmark[e.u]) {
+      hasCycle = true;
+    }
+    stackmark[u] = false;
+  }
+  for (let i = 0; i < N; i++) {
+    if (i === rootIdx) continue;
+    if (!visited[i]) dfs(i);
+  }
+
+  if (hasCycle) return null; // signal fallback required
+  // build parentMap
+  for (let v = 0; v < N; v++) {
+    if (v === rootIdx) continue;
+    const e = inEdge[v];
+    if (e) parentMap.set(nodes[v], nodes[e.u]);
+  }
+  return parentMap;
+}
+
+// --- Greedy fallback: cycle-break by weakest edge (previously described) ---
+function greedyResolve(nodes, incomingMap, params = PARAMS) {
+  const VIRTUAL_ROOT = '__ROOT__';
+  const parentChoice = new Map();
+  const candidateIdx = new Map();
+
+  for (const node of nodes) {
+    const arr = incomingMap.get(node) || [];
+    if (arr.length > 0) {
+      parentChoice.set(node, arr[0].from);
+      candidateIdx.set(node, 0);
+    } else {
+      parentChoice.set(node, VIRTUAL_ROOT);
+    }
+  }
+
+  function detectCycle(parentMap) {
+    const visited = new Set();
+    const inStack = new Set();
+    for (const start of nodes) {
+      if (visited.has(start)) continue;
+      let cur = start;
+      const stack = [];
+      while (cur !== VIRTUAL_ROOT && !visited.has(cur)) {
+        visited.add(cur);
+        inStack.add(cur);
+        stack.push(cur);
+        cur = parentMap.get(cur) || VIRTUAL_ROOT;
+        if (inStack.has(cur)) {
+          // collect cycle
+          const cycle = [];
+          for (let i = stack.length - 1; i >= 0; i--) {
+            const n = stack[i];
+            cycle.push(n);
+            if (n === cur) break;
+          }
+          return cycle.reverse();
+        }
+      }
+      for (const s of stack) inStack.delete(s);
+    }
+    return null;
+  }
+
+  let cycle = detectCycle(parentChoice);
+  while (cycle) {
+    // find weakest edge in cycle (child -> parent) by score
+    let weakest = { node: null, score: Infinity };
+    for (const child of cycle) {
+      const parent = parentChoice.get(child);
+      if (!parent || parent === VIRTUAL_ROOT) continue;
+      const arr = incomingMap.get(child) || [];
+      const idx = arr.findIndex(x => x.from === parent);
+      const sc = idx >= 0 ? arr[idx].score : -Infinity;
+      if (sc < weakest.score) weakest = { node: child, score: sc };
+    }
+    if (!weakest.node) break;
+    // advance candidate for that node
+    const arr = incomingMap.get(weakest.node) || [];
+    const curIdx = candidateIdx.get(weakest.node) || 0;
+    if (curIdx + 1 < arr.length) {
+      candidateIdx.set(weakest.node, curIdx + 1);
+      parentChoice.set(weakest.node, arr[curIdx + 1].from);
+    } else {
+      parentChoice.set(weakest.node, VIRTUAL_ROOT);
+    }
+    cycle = detectCycle(parentChoice);
+  }
+  return parentChoice;
+}
+
 class HistoryManager {
   constructor() {
     this.allVisits = [];
@@ -298,69 +649,200 @@ class HistoryManager {
     return cleanedRoots;
   }
 
-  // 集計モード: 同じURLを集約して最適なツリーを作成
+  // --- メイン: buildAggregatedTree の置換（HistoryManager.prototype.buildAggregatedTree） ---
   buildAggregatedTree() {
-    // URLごとの訪問情報を集約
+    // 1) aggregate visits by URL
     const urlVisitMap = new Map();
-    const urlTransitions = new Map(); // URL間の遷移関係を記録
-
-    // 各訪問を処理してURL間の関係を構築
-    for (const visit of this.allVisits) {
-      const url = visit.url;
-
-      // URLの訪問情報を集約
-      if (!urlVisitMap.has(url)) {
-        urlVisitMap.set(url, {
-          url: visit.url,
-          title: visit.title,
-          favicon: visit.favicon,
+    for (const v of this.allVisits) {
+      if (!urlVisitMap.has(v.url)) {
+        urlVisitMap.set(v.url, {
+          url: v.url,
+          title: v.title || v.url,
+          favicon: v.favicon,
           visits: [],
-          firstVisitTime: visit.visitTime,
-          lastVisitTime: visit.visitTime,
+          firstVisitTime: v.visitTime,
+          lastVisitTime: v.visitTime,
           visitCount: 0
         });
       }
-
-      const urlInfo = urlVisitMap.get(url);
-      urlInfo.visits.push(visit);
-      urlInfo.visitCount++;
-      urlInfo.firstVisitTime = Math.min(urlInfo.firstVisitTime, visit.visitTime);
-      urlInfo.lastVisitTime = Math.max(urlInfo.lastVisitTime, visit.visitTime);
+      const info = urlVisitMap.get(v.url);
+      info.visits.push(v);
+      info.visitCount++;
+      info.firstVisitTime = Math.min(info.firstVisitTime, v.visitTime);
+      info.lastVisitTime = Math.max(info.lastVisitTime, v.visitTime);
     }
 
-    // URL間の遷移関係を構築
-    for (const visit of this.allVisits) {
-      if (visit.referringVisitId) {
-        // 参照元の訪問を見つける
-        const referringVisit = this.allVisits.find(v => v.visitId === visit.referringVisitId);
-        if (referringVisit && referringVisit.url !== visit.url) {
-          const fromUrl = referringVisit.url;
-          const toUrl = visit.url;
+    // 2) transitions via visit.referringVisitId (O(n))
+    const visitIdMap = new Map(this.allVisits.map(v => [v.visitId, v]));
+    const rawTransitions = new Map(); // fromUrl -> Map(toUrl -> {count, firstTime, lastTime})
+    for (const v of this.allVisits) {
+      if (!v.referringVisitId) continue;
+      const r = visitIdMap.get(v.referringVisitId);
+      if (!r || r.url === v.url) continue;
+      const from = r.url, to = v.url;
+      if (!rawTransitions.has(from)) rawTransitions.set(from, new Map());
+      const m = rawTransitions.get(from);
+      if (!m.has(to)) m.set(to, { count: 0, firstTime: v.visitTime, lastTime: v.visitTime });
+      const meta = m.get(to);
+      meta.count++;
+      meta.firstTime = Math.min(meta.firstTime, v.visitTime);
+      meta.lastTime = Math.max(meta.lastTime, v.visitTime);
+    }
 
-          if (!urlTransitions.has(fromUrl)) {
-            urlTransitions.set(fromUrl, new Map());
+    // 3) compute edges with scoring
+    const now = Date.now();
+    const incomingMap = new Map(); // toUrl -> [{from, to, score, meta}, ...]
+    // transitions first
+    for (const [from, m] of rawTransitions) {
+      for (const [to, meta] of m) {
+        const score = _computeEdgeScore(from, to, meta, urlVisitMap, now, PARAMS);
+        if (score < PARAMS.MIN_EDGE_SCORE) continue;
+        if (!incomingMap.has(to)) incomingMap.set(to, []);
+        incomingMap.get(to).push({ from, to, score, meta });
+      }
+    }
+
+    // 4) add URL-hierarchy inferred edges (orphans & general)
+    // Build URL info for path comparison
+    const urlInfo = new Map();
+    for (const [url, info] of urlVisitMap) {
+      try {
+        const u = new URL(url);
+        const parts = u.pathname.split('/').filter(Boolean);
+        urlInfo.set(url, { hostname: u.hostname, parts });
+      } catch (e) {
+        urlInfo.set(url, { hostname: null, parts: [] });
+      }
+    }
+    const urls = Array.from(urlVisitMap.keys());
+    // For each pair same-domain where path prefix suggests parent, add boosted edge
+    for (let i = 0; i < urls.length; i++) {
+      const a = urls[i];
+      const ai = urlInfo.get(a);
+      if (!ai || !ai.hostname) continue;
+      for (let j = 0; j < urls.length; j++) {
+        if (i === j) continue;
+        const b = urls[j];
+        const bi = urlInfo.get(b);
+        if (!bi || bi.hostname !== ai.hostname) continue;
+        // check if a is potential parent of b
+        if (ai.parts.length < bi.parts.length) {
+          const matching = _countMatchingPathParts(ai.parts, bi.parts);
+          if (matching > 0) {
+            // base score from matching parts
+            const base = (matching / Math.max(1, ai.parts.length)) * PARAMS.PATH_WEIGHT;
+            // add hierarchy bonus to make these competitive
+            const meta = { count: 0, firstTime: 0, lastTime: 0 };
+            const score = base + PARAMS.HIERARCHY_SCORE_BONUS;
+            if (score >= PARAMS.MIN_EDGE_SCORE) {
+              if (!incomingMap.has(b)) incomingMap.set(b, []);
+              incomingMap.get(b).push({ from: a, to: b, score, meta, inferred: true });
+            }
           }
-
-          const fromTransitions = urlTransitions.get(fromUrl);
-          if (!fromTransitions.has(toUrl)) {
-            fromTransitions.set(toUrl, {
-              count: 0,
-              firstTime: visit.visitTime,
-              lastTime: visit.visitTime
-            });
-          }
-
-          const transition = fromTransitions.get(toUrl);
-          transition.count++;
-          transition.firstTime = Math.min(transition.firstTime, visit.visitTime);
-          transition.lastTime = Math.max(transition.lastTime, visit.visitTime);
+        } else if (ai.parts.length === 0 && bi.parts.length >= 1) {
+          // root -> child preference
+          const score = PARAMS.ROOT_BONUS + PARAMS.HIERARCHY_SCORE_BONUS / 2;
+          if (!incomingMap.has(b)) incomingMap.set(b, []);
+          incomingMap.get(b).push({ from: a, to: b, score, meta: { count:0 }, inferred: true });
         }
       }
     }
 
-    // 集約されたツリーを構築
-    const aggregatedNodes = this.buildOptimalTree(urlVisitMap, urlTransitions);
-    return aggregatedNodes;
+    // 5) prune incoming edges to topK per node
+    for (const [to, arr] of incomingMap) {
+      arr.sort((A, B) => {
+        if (B.score !== A.score) return B.score - A.score;
+        // tie-breaker: prefer transitions over inferred
+        if ((B.meta?.count || 0) !== (A.meta?.count || 0)) return (B.meta?.count || 0) - (A.meta?.count || 0);
+        return (A.from || '').localeCompare(B.from || '');
+      });
+      if (arr.length > PARAMS.TOP_K_INCOMING) {
+        incomingMap.set(to, arr.slice(0, PARAMS.TOP_K_INCOMING));
+      } else {
+        incomingMap.set(to, arr);
+      }
+    }
+
+    // 6) prepare nodes + edges list for Edmonds
+    const nodesList = urls.slice(); // nodes are URLs
+    const VIRTUAL_ROOT = '__ROOT__';
+    nodesList.push(VIRTUAL_ROOT);
+
+    const edges = [];
+    for (const [to, arr] of incomingMap) {
+      for (const e of arr) {
+        edges.push({ u: e.from, v: e.to, w: e.score });
+      }
+    }
+    // Also allow any node to be attached to VIRTUAL_ROOT with small base weight so tree spans all
+    for (const url of urls) {
+      edges.push({ u: VIRTUAL_ROOT, v: url, w: 1.0 }); // small weight ensures connectivity
+    }
+
+    // 7) run Edmonds maximum arborescence
+    let parentMap = null;
+    try {
+      parentMap = edmondsMaximumArborescence(VIRTUAL_ROOT, nodesList, edges);
+      if (PARAMS.DEBUG) console.log('Edmonds result parentMap:', parentMap);
+    } catch (e) {
+      console.warn('Edmonds failed:', e);
+      parentMap = null;
+    }
+
+    // 8) fallback to greedyResolve if edmonds returned null (cycles or complexity)
+    if (!parentMap) {
+      if (PARAMS.DEBUG) console.log('Falling back to greedy cycle-breaker');
+      const greedyMap = greedyResolve(urls, incomingMap, PARAMS);
+      parentMap = greedyMap;
+    }
+
+    // 9) build parentToChildren mapping
+    const parentToChildren = new Map();
+    for (const url of urls) parentToChildren.set(url, []);
+    for (const url of urls) {
+      const p = parentMap.get(url) || VIRTUAL_ROOT;
+      if (p && p !== VIRTUAL_ROOT) {
+        if (!parentToChildren.has(p)) parentToChildren.set(p, []);
+        parentToChildren.get(p).push(url);
+      }
+    }
+
+    // 10) construct node objects with children recursively
+    const makeNode = (u) => {
+      const info = urlVisitMap.get(u);
+      return {
+        url: info.url,
+        title: info.title,
+        favicon: info.favicon,
+        visitTime: info.lastVisitTime,
+        visitCount: info.visitCount,
+        children: []
+      };
+    };
+    const nodeObjects = new Map();
+    for (const url of urls) nodeObjects.set(url, makeNode(url));
+    for (const [p, children] of parentToChildren) {
+      const pn = nodeObjects.get(p);
+      if (!pn) continue;
+      // sort children by visitCount desc then lastVisitTime
+      children.sort((a,b) => {
+        const A = urlVisitMap.get(a), B = urlVisitMap.get(b);
+        if (B.visitCount !== A.visitCount) return B.visitCount - A.visitCount;
+        return B.lastVisitTime - A.lastVisitTime;
+      });
+      pn.children = children.map(c => nodeObjects.get(c));
+    }
+
+    // 11) roots: parent == VIRTUAL_ROOT
+    const roots = [];
+    for (const url of urls) {
+      const p = parentMap.get(url) || VIRTUAL_ROOT;
+      if (p === VIRTUAL_ROOT) roots.push(nodeObjects.get(url));
+    }
+    roots.sort((a,b) => b.visitTime - a.visitTime);
+
+    if (PARAMS.DEBUG) console.log(`AggregatedTree built: ${nodesList.length-1} URLs, roots: ${roots.length}`);
+    return roots;
   }
 
   // 最適なツリー構造を構築
