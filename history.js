@@ -9,6 +9,215 @@ function historyGetVisits(details) {
   return new Promise((resolve) => chrome.history.getVisits(details, resolve));
 }
 
+// WebNavigation API wrapper
+function webNavigationGetAllFrames(details) {
+  return new Promise((resolve) => chrome.webNavigation.getAllFrames(details, resolve));
+}
+
+// Navigation tracking for enhanced tree building (Beta mode)
+class NavigationTracker {
+  constructor() {
+    this.navigationData = new Map(); // visitId -> navigation details
+    this.tabParents = new Map(); // tabId -> parent tab info
+    this.backForwardHistory = new Map(); // tabId -> navigation stack
+    this.newTabRelations = new Map(); // childTabId -> parentTabInfo
+    this.setupWebNavigationListeners();
+  }
+
+  setupWebNavigationListeners() {
+    if (typeof chrome !== 'undefined' && chrome.webNavigation) {
+      // ナビゲーション開始時
+      chrome.webNavigation.onBeforeNavigate.addListener((details) => {
+        if (details.frameId === 0) { // メインフレームのみ
+          this.trackNavigation(details);
+        }
+      });
+
+      // ナビゲーション完了時
+      chrome.webNavigation.onCompleted.addListener((details) => {
+        if (details.frameId === 0) {
+          this.recordCompletedNavigation(details);
+        }
+      });
+
+      // 新しいタブが作成された時の親タブを追跡
+      if (chrome.tabs && chrome.tabs.onCreated) {
+        chrome.tabs.onCreated.addListener((tab) => {
+          chrome.tabs.query({active: true, currentWindow: true}, (activeTabs) => {
+            if (activeTabs.length > 0 && activeTabs[0].id !== tab.id) {
+              const parentInfo = {
+                parentTabId: activeTabs[0].id,
+                parentUrl: activeTabs[0].url,
+                parentTitle: activeTabs[0].title,
+                createdTime: Date.now(),
+                confidence: 1.0
+              };
+              this.newTabRelations.set(tab.id, parentInfo);
+              console.log(`新しいタブ追跡: Tab ${tab.id} の親は Tab ${activeTabs[0].id} (${activeTabs[0].url})`);
+            }
+          });
+        });
+      }
+
+      // タブが削除された時のクリーンアップ
+      if (chrome.tabs && chrome.tabs.onRemoved) {
+        chrome.tabs.onRemoved.addListener((tabId) => {
+          this.newTabRelations.delete(tabId);
+          this.backForwardHistory.delete(tabId);
+        });
+      }
+    }
+  }
+
+  trackNavigation(details) {
+    const navigationInfo = {
+      tabId: details.tabId,
+      url: details.url,
+      timeStamp: details.timeStamp,
+      transitionType: details.transitionType,
+      transitionQualifiers: details.transitionQualifiers || [],
+      parentTabInfo: this.newTabRelations.get(details.tabId)
+    };
+
+    // 戻る/進む操作の検出
+    if (details.transitionQualifiers) {
+      navigationInfo.isBackForward = details.transitionQualifiers.includes('forward_back');
+      navigationInfo.isReload = details.transitionQualifiers.includes('client_redirect') ||
+                               details.transitionQualifiers.includes('server_redirect');
+    }
+
+    // タブごとのナビゲーション履歴を管理
+    if (!this.backForwardHistory.has(details.tabId)) {
+      this.backForwardHistory.set(details.tabId, []);
+    }
+
+    const tabHistory = this.backForwardHistory.get(details.tabId);
+    tabHistory.push(navigationInfo);
+
+    // 履歴が長くなりすぎないよう制限
+    if (tabHistory.length > 50) {
+      tabHistory.shift();
+    }
+
+    this.navigationData.set(`${details.tabId}-${details.timeStamp}`, navigationInfo);
+  }
+
+  recordCompletedNavigation(details) {
+    const navKey = `${details.tabId}-${details.timeStamp}`;
+    const navInfo = this.navigationData.get(navKey);
+    if (navInfo) {
+      navInfo.completed = true;
+      navInfo.completedTime = Date.now();
+    }
+  }
+
+  // 新しいタブで開かれたURLの親を特定
+  findNewTabParent(url, visitTime, tabId = null) {
+    // 特定のタブIDがある場合は直接検索
+    if (tabId && this.newTabRelations.has(tabId)) {
+      const parentInfo = this.newTabRelations.get(tabId);
+      const timeDiff = Math.abs(visitTime - parentInfo.createdTime);
+      if (timeDiff < 10000) { // 10秒以内なら関連性ありと判定
+        return {
+          parentUrl: parentInfo.parentUrl,
+          parentTitle: parentInfo.parentTitle,
+          parentTabId: parentInfo.parentTabId,
+          confidence: Math.max(0.5, 1 - (timeDiff / 10000)),
+          relationType: 'new_tab'
+        };
+      }
+    }
+
+    // 時間ベースの推定
+    for (const [currentTabId, parentInfo] of this.newTabRelations) {
+      const timeDiff = Math.abs(visitTime - parentInfo.createdTime);
+      if (timeDiff < 5000) { // 5秒以内なら関連性ありと判定
+        return {
+          parentUrl: parentInfo.parentUrl,
+          parentTitle: parentInfo.parentTitle,
+          parentTabId: parentInfo.parentTabId,
+          confidence: Math.max(0.3, 1 - (timeDiff / 5000)),
+          relationType: 'new_tab_time_based'
+        };
+      }
+    }
+    return null;
+  }
+
+  // 戻る動作を検出
+  detectBackNavigation(url, visitTime, tabId = null) {
+    const tabHistory = tabId ? this.backForwardHistory.get(tabId) : null;
+
+    if (tabHistory) {
+      // 同じタブでの戻る動作を検出
+      for (let i = tabHistory.length - 1; i >= 0; i--) {
+        const nav = tabHistory[i];
+        if (nav.isBackForward && nav.url === url) {
+          const timeDiff = Math.abs(visitTime - nav.timeStamp);
+          if (timeDiff < 1000) { // 1秒以内
+            return {
+              confidence: 0.9,
+              relationType: 'back_forward',
+              originalNavigation: nav
+            };
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  // ナビゲーション履歴を取得
+  getNavigationHistory(tabId) {
+    return this.backForwardHistory.get(tabId) || [];
+  }
+
+  // 階層移動を検出
+  detectHierarchyNavigation(fromUrl, toUrl, visitTime) {
+    try {
+      const from = new URL(fromUrl);
+      const to = new URL(toUrl);
+
+      if (from.hostname !== to.hostname) return null;
+
+      const fromParts = from.pathname.split('/').filter(Boolean);
+      const toParts = to.pathname.split('/').filter(Boolean);
+
+      // 深い階層から浅い階層への移動（一覧ページへの戻り）
+      if (fromParts.length > toParts.length) {
+        const isParentPath = toParts.every((part, index) => fromParts[index] === part);
+        if (isParentPath) {
+          const hierarchyDiff = fromParts.length - toParts.length;
+          return {
+            confidence: Math.min(0.9, 0.5 + (hierarchyDiff * 0.2)),
+            relationType: 'hierarchy_up',
+            hierarchyDiff: hierarchyDiff
+          };
+        }
+      }
+
+      // 浅い階層から深い階層への移動（詳細ページへ）
+      if (toParts.length > fromParts.length) {
+        const isChildPath = fromParts.every((part, index) => toParts[index] === part);
+        if (isChildPath) {
+          const hierarchyDiff = toParts.length - fromParts.length;
+          return {
+            confidence: Math.min(0.8, 0.4 + (hierarchyDiff * 0.15)),
+            relationType: 'hierarchy_down',
+            hierarchyDiff: hierarchyDiff
+          };
+        }
+      }
+
+    } catch (e) {
+      console.error('階層移動検出エラー:', e);
+    }
+
+    return null;
+  }
+}
+
 // === 集約モード強化版: Chu-Liu/Edmonds ベースの実装 ===
 
 const PARAMS = {
@@ -371,12 +580,15 @@ class HistoryManager {
     this.daysPerPage = 7; // デフォルト値、period inputから取得
     this.searchStartTime = null;
     this.searchEndTime = null;
-    this.viewMode = 'chronological'; // 'chronological' or 'aggregated'
+    this.viewMode = 'chronological'; // 'chronological', 'aggregated', or 'beta'
     this.stats = {
       totalSites: 0,
       totalVisits: 0,
       todayVisits: 0
     };
+
+    // NavigationTracker のインスタンスを作成（Beta機能用）
+    this.navigationTracker = new NavigationTracker();
 
     this.initializeEventListeners();
     this.applyTheme();
@@ -843,6 +1055,274 @@ class HistoryManager {
 
     if (PARAMS.DEBUG) console.log(`AggregatedTree built: ${nodesList.length-1} URLs, roots: ${roots.length}`);
     return roots;
+  }
+
+  // Beta機能：高度なナビゲーション解析によるツリー構築
+  buildBetaTree() {
+    console.log('=== Beta Tree Mode: 高度なナビゲーション解析開始 ===');
+
+    // 基本的な訪問マップを作成
+    const visitMap = new Map();
+    for (const visit of this.allVisits) {
+      visitMap.set(visit.visitId, { ...visit, children: [], betaRelations: [] });
+    }
+
+    const processedVisits = new Set();
+    const betaRelations = []; // Beta機能で検出された関係
+
+    // 1. 基本的な親子関係（referringVisitIdベース）を構築
+    for (const visit of visitMap.values()) {
+      if (visit.referringVisitId && visitMap.has(visit.referringVisitId)) {
+        const parent = visitMap.get(visit.referringVisitId);
+        parent.children.push(visit);
+        visit.betaRelations.push({
+          type: 'referring_visit',
+          confidence: 1.0,
+          parentVisitId: visit.referringVisitId
+        });
+        processedVisits.add(visit.visitId);
+      }
+    }
+
+    // 2. 孤立した訪問に対してBeta機能を適用
+    const orphanVisits = Array.from(visitMap.values()).filter(visit =>
+      !visit.referringVisitId || !visitMap.has(visit.referringVisitId)
+    );
+
+    console.log(`孤立した訪問: ${orphanVisits.length}個 / 全訪問: ${this.allVisits.length}個`);
+
+    for (const orphan of orphanVisits) {
+      if (processedVisits.has(orphan.visitId)) continue;
+
+      let bestParent = null;
+      let bestRelation = null;
+      let bestScore = 0;
+
+      // 2.1 新しいタブで開かれた関係を検出
+      const newTabRelation = this.navigationTracker.findNewTabParent(
+        orphan.url,
+        orphan.visitTime,
+        orphan.tabId
+      );
+
+      if (newTabRelation && newTabRelation.confidence > 0.6) {
+        const parentVisit = this.findVisitByUrl(newTabRelation.parentUrl, orphan.visitTime, visitMap);
+        if (parentVisit && newTabRelation.confidence > bestScore) {
+          bestParent = parentVisit;
+          bestRelation = {
+            type: 'new_tab',
+            confidence: newTabRelation.confidence,
+            parentUrl: newTabRelation.parentUrl,
+            details: newTabRelation
+          };
+          bestScore = newTabRelation.confidence;
+        }
+      }
+
+      // 2.2 戻る動作を検出
+      const backNavigation = this.navigationTracker.detectBackNavigation(
+        orphan.url,
+        orphan.visitTime,
+        orphan.tabId
+      );
+
+      if (backNavigation && backNavigation.confidence > bestScore) {
+        // 戻る動作の場合、過去の同じURLへの訪問を親として設定
+        const previousVisit = this.findPreviousSameUrlVisit(orphan, visitMap);
+        if (previousVisit) {
+          bestParent = previousVisit;
+          bestRelation = {
+            type: 'back_navigation',
+            confidence: backNavigation.confidence,
+            details: backNavigation
+          };
+          bestScore = backNavigation.confidence;
+        }
+      }
+
+      // 2.3 階層移動を検出
+      for (const candidateParent of visitMap.values()) {
+        if (candidateParent.visitId === orphan.visitId) continue;
+        if (Math.abs(candidateParent.visitTime - orphan.visitTime) > 300000) continue; // 5分以内
+
+        const hierarchyRelation = this.navigationTracker.detectHierarchyNavigation(
+          candidateParent.url,
+          orphan.url,
+          orphan.visitTime
+        );
+
+        if (hierarchyRelation && hierarchyRelation.confidence > bestScore) {
+          bestParent = candidateParent;
+          bestRelation = {
+            type: 'hierarchy_navigation',
+            confidence: hierarchyRelation.confidence,
+            parentUrl: candidateParent.url,
+            details: hierarchyRelation
+          };
+          bestScore = hierarchyRelation.confidence;
+        }
+      }
+
+      // 2.4 時系列パターン（短時間での同一URL再訪問）
+      const timeBasedRelation = this.detectTimeBasedPattern(orphan, visitMap);
+      if (timeBasedRelation && timeBasedRelation.confidence > bestScore) {
+        bestParent = timeBasedRelation.parent;
+        bestRelation = {
+          type: 'time_based_pattern',
+          confidence: timeBasedRelation.confidence,
+          details: timeBasedRelation
+        };
+        bestScore = timeBasedRelation.confidence;
+      }
+
+      // 3. 最適な親子関係を設定
+      if (bestParent && bestScore > 0.3) { // 最低信頼度30%
+        bestParent.children.push(orphan);
+        orphan.betaRelations.push(bestRelation);
+        processedVisits.add(orphan.visitId);
+
+        betaRelations.push({
+          child: orphan,
+          parent: bestParent,
+          relation: bestRelation
+        });
+
+        console.log(`Beta関係検出: ${bestRelation.type} (信頼度: ${bestScore.toFixed(2)}) ${bestParent.title || bestParent.url} -> ${orphan.title || orphan.url}`);
+      }
+    }
+
+    // 4. ルートノードを抽出（親を持たない訪問）
+    const roots = Array.from(visitMap.values()).filter(visit => {
+      // 他の訪問の子要素になっていない訪問がルート
+      return !Array.from(visitMap.values()).some(parent =>
+        parent.children.includes(visit)
+      );
+    });
+
+    // 5. 子要素を時刻順でソート
+    const sortChildren = (node) => {
+      if (node.children.length > 0) {
+        node.children.sort((a, b) => b.visitTime - a.visitTime);
+        node.children.forEach(sortChildren);
+      }
+    };
+    roots.forEach(sortChildren);
+
+    // 6. ルートノードを時刻順でソート
+    roots.sort((a, b) => b.visitTime - a.visitTime);
+
+    console.log(`=== Beta Tree 構築完了 ===`);
+    console.log(`ルートノード: ${roots.length}個`);
+    console.log(`検出された関係: ${betaRelations.length}個`);
+    console.log(`関係タイプ別:`, this.summarizeBetaRelations(betaRelations));
+
+    return roots;
+  }
+
+  // URLに基づいて訪問を検索
+  findVisitByUrl(url, referenceTime, visitMap, timeWindow = 10000) {
+    const candidates = Array.from(visitMap.values()).filter(visit =>
+      visit.url === url &&
+      Math.abs(visit.visitTime - referenceTime) < timeWindow
+    );
+
+    if (candidates.length === 0) return null;
+
+    // 参照時刻に最も近い訪問を返す
+    candidates.sort((a, b) =>
+      Math.abs(a.visitTime - referenceTime) - Math.abs(b.visitTime - referenceTime)
+    );
+
+    return candidates[0];
+  }
+
+  // 過去の同じURLへの訪問を検索
+  findPreviousSameUrlVisit(visit, visitMap) {
+    const candidates = Array.from(visitMap.values()).filter(candidate =>
+      candidate.url === visit.url &&
+      candidate.visitTime < visit.visitTime &&
+      candidate.visitTime > visit.visitTime - 300000 // 5分以内
+    );
+
+    if (candidates.length === 0) return null;
+
+    // 最も近い過去の訪問を返す
+    candidates.sort((a, b) => b.visitTime - a.visitTime);
+    return candidates[0];
+  }
+
+  // 時系列パターンを検出
+  detectTimeBasedPattern(visit, visitMap) {
+    // 同じURLへの短時間での再訪問パターン
+    const sameUrlVisits = Array.from(visitMap.values()).filter(candidate =>
+      candidate.url === visit.url &&
+      candidate.visitId !== visit.visitId &&
+      Math.abs(candidate.visitTime - visit.visitTime) < 30000 // 30秒以内
+    );
+
+    if (sameUrlVisits.length > 0) {
+      const closestVisit = sameUrlVisits.reduce((closest, current) =>
+        Math.abs(current.visitTime - visit.visitTime) <
+        Math.abs(closest.visitTime - visit.visitTime) ? current : closest
+      );
+
+      const timeDiff = Math.abs(closestVisit.visitTime - visit.visitTime);
+      const confidence = Math.max(0.4, 1 - (timeDiff / 30000));
+
+      return {
+        parent: closestVisit,
+        confidence: confidence,
+        timeDiff: timeDiff,
+        patternType: 'same_url_revisit'
+      };
+    }
+
+    // 遷移タイプベースのパターン検出
+    if (visit.transition) {
+      const transitionScores = {
+        'reload': 0.8,          // リロードは高い関連性
+        'auto_bookmark': 0.6,   // ブックマークからは中程度
+        'typed': 0.4,           // 直接入力は低め
+        'form_submit': 0.7      // フォーム送信は高め
+      };
+
+      const score = transitionScores[visit.transition];
+      if (score) {
+        // 直前の訪問を親候補として検索
+        const recentVisits = Array.from(visitMap.values()).filter(candidate =>
+          candidate.visitTime < visit.visitTime &&
+          candidate.visitTime > visit.visitTime - 60000 && // 1分以内
+          candidate.visitId !== visit.visitId
+        );
+
+        if (recentVisits.length > 0) {
+          const mostRecent = recentVisits.reduce((recent, current) =>
+            current.visitTime > recent.visitTime ? current : recent
+          );
+
+          return {
+            parent: mostRecent,
+            confidence: score,
+            patternType: `transition_${visit.transition}`
+          };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  // Beta関係の統計情報を作成
+  summarizeBetaRelations(betaRelations) {
+    const summary = {};
+    for (const rel of betaRelations) {
+      const type = rel.relation.type;
+      if (!summary[type]) {
+        summary[type] = 0;
+      }
+      summary[type]++;
+    }
+    return summary;
   }
 
   // 最適なツリー構造を構築
@@ -1401,6 +1881,15 @@ class HistoryManager {
       } else {
         dataToRender = this.filterTree(aggregatedData, this.currentSearchTerm);
       }
+    } else if (this.viewMode === 'beta') {
+      // Betaモード：高度なナビゲーション解析を使用したツリー構築
+      const betaData = this.buildBetaTree();
+
+      if (!this.currentSearchTerm) {
+        dataToRender = betaData;
+      } else {
+        dataToRender = this.filterTree(betaData, this.currentSearchTerm);
+      }
     } else {
       // 時系列モード：従来の処理
       if (!this.currentSearchTerm) {
@@ -1546,11 +2035,34 @@ class HistoryManager {
     titleLink.className = 'item-title';
     titleLink.href = node.url;
 
-    // 集計モードでは訪問回数も表示
+    // モードに応じてタイトル表示を調整
     if (this.viewMode === 'aggregated' && node.visitCount > 1) {
       titleLink.textContent = `${node.title} (${node.visitCount}回)`;
     } else {
       titleLink.textContent = node.title;
+    }
+
+    // 特殊な遷移タイプに応じてアイコンを追加
+    if (node.transition) {
+      const transitionIcon = this.getTransitionIcon(node.transition);
+      if (transitionIcon) {
+        const iconSpan = document.createElement('span');
+        iconSpan.className = 'transition-icon';
+        iconSpan.textContent = transitionIcon;
+        iconSpan.title = this.getTransitionDescription(node.transition);
+        iconSpan.style.marginLeft = '8px';
+        iconSpan.style.fontSize = '12px';
+        iconSpan.style.opacity = '0.7';
+        titleLink.appendChild(iconSpan);
+      }
+    }
+
+    // Beta関係の表示
+    if (this.viewMode === 'beta' && node.betaRelations && node.betaRelations.length > 0) {
+      const betaInfo = this.createBetaRelationInfo(node.betaRelations);
+      if (betaInfo) {
+        titleLink.appendChild(betaInfo);
+      }
     }
 
     titleLink.target = '_blank';
@@ -1586,6 +2098,123 @@ class HistoryManager {
     }
 
     return li;
+  }
+
+  // 遷移タイプに応じたアイコンを取得
+  getTransitionIcon(transition) {
+    const iconMap = {
+      'typed': '⌨️',          // 直接入力
+      'auto_bookmark': '🔖',   // ブックマーク
+      'generated': '🔍',       // 検索結果
+      'reload': '🔄',          // リロード
+      'form_submit': '📝',     // フォーム送信
+      'keyword': '🔑',         // キーワード
+      'auto_toplevel': '🏠',   // スタートページ
+      'manual_subframe': '🖼️', // サブフレーム
+      'auto_subframe': '📦'    // 自動サブフレーム
+    };
+    return iconMap[transition] || null;
+  }
+
+  // 遷移タイプの説明を取得
+  getTransitionDescription(transition) {
+    const descriptionMap = {
+      'link': 'リンクをクリック',
+      'typed': 'アドレスバーに直接入力',
+      'auto_bookmark': 'ブックマークまたは候補から選択',
+      'generated': '検索候補から選択',
+      'reload': 'ページをリロード',
+      'form_submit': 'フォームを送信',
+      'keyword': 'キーワード検索',
+      'auto_toplevel': 'スタートページ',
+      'manual_subframe': 'サブフレームで選択',
+      'auto_subframe': '自動サブフレーム'
+    };
+    return descriptionMap[transition] || `遷移: ${transition}`;
+  }
+
+  // Beta関係情報を作成
+  createBetaRelationInfo(betaRelations) {
+    if (!betaRelations || betaRelations.length === 0) return null;
+
+    const relationContainer = document.createElement('span');
+    relationContainer.className = 'beta-relations';
+    relationContainer.style.marginLeft = '8px';
+    relationContainer.style.fontSize = '11px';
+
+    for (const relation of betaRelations) {
+      const relationBadge = document.createElement('span');
+      relationBadge.className = 'beta-relation-badge';
+      relationBadge.style.display = 'inline-block';
+      relationBadge.style.marginLeft = '4px';
+      relationBadge.style.padding = '1px 4px';
+      relationBadge.style.borderRadius = '3px';
+      relationBadge.style.fontSize = '10px';
+      relationBadge.style.fontWeight = 'bold';
+
+      const { icon, text, color } = this.getBetaRelationDisplay(relation);
+
+      relationBadge.textContent = `${icon} ${text}`;
+      relationBadge.style.backgroundColor = color;
+      relationBadge.style.color = '#fff';
+      relationBadge.title = this.getBetaRelationTooltip(relation);
+
+      relationContainer.appendChild(relationBadge);
+    }
+
+    return relationContainer;
+  }
+
+  // Beta関係の表示情報を取得
+  getBetaRelationDisplay(relation) {
+    const displays = {
+      'referring_visit': { icon: '🔗', text: '参照', color: '#28a745' },
+      'new_tab': { icon: '🆕', text: '新タブ', color: '#007bff' },
+      'back_navigation': { icon: '⬅️', text: '戻る', color: '#ffc107' },
+      'hierarchy_navigation': { icon: '📂', text: '階層', color: '#6f42c1' },
+      'time_based_pattern': { icon: '⏱️', text: '時系列', color: '#fd7e14' }
+    };
+
+    const display = displays[relation.type] || { icon: '❓', text: '不明', color: '#6c757d' };
+
+    // 信頼度に応じて色の透明度を調整
+    const confidence = relation.confidence || 0;
+    const alpha = Math.max(0.6, confidence);
+
+    return {
+      ...display,
+      color: this.adjustColorAlpha(display.color, alpha)
+    };
+  }
+
+  // Beta関係のツールチップを作成
+  getBetaRelationTooltip(relation) {
+    const baseTooltip = `関係タイプ: ${relation.type}\n信頼度: ${((relation.confidence || 0) * 100).toFixed(1)}%`;
+
+    switch (relation.type) {
+      case 'new_tab':
+        return `${baseTooltip}\n新しいタブで開かれた関係`;
+      case 'back_navigation':
+        return `${baseTooltip}\nブラウザの戻るボタンによる移動`;
+      case 'hierarchy_navigation':
+        const hierarchyType = relation.details?.relationType === 'hierarchy_up' ? '上位階層へ' : '下位階層へ';
+        return `${baseTooltip}\n${hierarchyType}の階層移動`;
+      case 'time_based_pattern':
+        return `${baseTooltip}\n短時間での関連パターン`;
+      default:
+        return baseTooltip;
+    }
+  }
+
+  // 色の透明度を調整
+  adjustColorAlpha(hexColor, alpha) {
+    // 簡単な実装：透明度に応じて色を暗くする
+    const darkening = 1 - ((1 - alpha) * 0.5);
+    const r = parseInt(hexColor.slice(1, 3), 16) * darkening;
+    const g = parseInt(hexColor.slice(3, 5), 16) * darkening;
+    const b = parseInt(hexColor.slice(5, 7), 16) * darkening;
+
+    return `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
   }
 
   formatTime(date) {

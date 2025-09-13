@@ -571,6 +571,50 @@
           background-color: var(--bg-surface-variant);
         }
       }
+
+      /* Beta関係バッジのスタイル */
+      .beta-relations {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+      }
+
+      .beta-relation-badge {
+        display: inline-block;
+        padding: 1px 4px;
+        border-radius: 3px;
+        font-size: 9px;
+        font-weight: bold;
+        color: #fff;
+        line-height: 1.2;
+        min-width: 30px;
+        text-align: center;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        transition: transform 0.1s ease;
+      }
+
+      .beta-relation-badge:hover {
+        transform: scale(1.1);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+      }
+
+      /* 遷移アイコンのスタイル */
+      .transition-icon {
+        display: inline-block;
+        margin-left: 4px;
+        font-size: 10px;
+        opacity: 0.7;
+        transition: opacity 0.2s ease;
+      }
+
+      .transition-icon:hover {
+        opacity: 1;
+      }
+
+      /* Beta情報のツールチップ改善 */
+      .beta-relation-badge[title] {
+        cursor: help;
+      }
     </style>
   </head>
   <body>
@@ -596,6 +640,7 @@
           <select id="viewMode">
             <option value="chronological" selected>時系列</option>
             <option value="aggregated">集計</option>
+            <option value="beta">Beta (高度解析)</option>
           </select>
         </div>
         <div class="stats-inline" id="statsInline" style="display: none;">
