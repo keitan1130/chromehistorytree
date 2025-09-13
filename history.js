@@ -2359,7 +2359,8 @@ class HistoryManager {
       li.appendChild(mergedInfoDiv);
     }
 
-    // 生成されたルートドメインの説明表示（Betaモードのみ）
+    // 生成されたルートドメインの説明表示（Betaモードのみ）- 削除
+    /*
     if (this.viewMode === 'beta' && node.isGeneratedRoot) {
       const rootInfoDiv = document.createElement('div');
       rootInfoDiv.className = 'generated-root-info';
@@ -2368,12 +2369,11 @@ class HistoryManager {
       rootInfoDiv.style.marginLeft = '32px'; // アイコン分のマージン
       rootInfoDiv.style.marginTop = '2px';
       rootInfoDiv.style.fontStyle = 'italic';
-
-      rootInfoDiv.textContent = '自動生成されたルートドメイン（検索URLの整理用）';
-      li.appendChild(rootInfoDiv);
+      
+      rootInfoDiv.textContent = '';
+      // li.appendChild(rootInfoDiv); // 説明文言を削除するためコメントアウト
     }
-
-    // URL表示
+    */    // URL表示
     if (node.url !== node.title) {
       const urlDiv = document.createElement('div');
       urlDiv.className = 'item-url';
