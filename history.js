@@ -843,8 +843,12 @@ class HistoryManager {
     roots.forEach(countChildren);
     console.log(`総子要素数: ${totalChildren}`);
 
-    // ルートノードも時刻順（新しい順）でソート
-    roots.sort((a, b) => b.visitTime - a.visitTime);
+    // ルートノードも最新の履歴時刻でソート（ツリー全体を考慮）
+    roots.sort((a, b) => {
+      const aLatest = this.getLatestVisitTimeInTree(a);
+      const bLatest = this.getLatestVisitTimeInTree(b);
+      return bLatest - aLatest; // 新しい順
+    });
 
     // 子要素を時刻順（新しい順）でソート
     function sortChildren(node) {
@@ -1051,7 +1055,12 @@ class HistoryManager {
       const p = parentMap.get(url) || VIRTUAL_ROOT;
       if (p === VIRTUAL_ROOT) roots.push(nodeObjects.get(url));
     }
-    roots.sort((a,b) => b.visitTime - a.visitTime);
+    // 集計モードでもツリー全体の最新時刻でソート
+    roots.sort((a, b) => {
+      const aLatest = this.getLatestVisitTimeInTree(a);
+      const bLatest = this.getLatestVisitTimeInTree(b);
+      return bLatest - aLatest; // 新しい順
+    });
 
     if (PARAMS.DEBUG) console.log(`AggregatedTree built: ${nodesList.length-1} URLs, roots: ${roots.length}`);
     return roots;
@@ -1211,8 +1220,12 @@ class HistoryManager {
     };
     roots.forEach(sortChildren);
 
-    // 7. ルートノードを時刻順でソート
-    roots.sort((a, b) => b.visitTime - a.visitTime);
+    // 7. ルートノードを最新の履歴時刻でソート（ツリー全体を考慮）
+    roots.sort((a, b) => {
+      const aLatest = this.getLatestVisitTimeInTree(a);
+      const bLatest = this.getLatestVisitTimeInTree(b);
+      return bLatest - aLatest; // 新しい順
+    });
 
     console.log(`=== Beta Tree 構築完了 ===`);
     console.log(`ルートノード: ${roots.length}個`);
@@ -1220,6 +1233,23 @@ class HistoryManager {
     console.log(`関係タイプ別:`, this.summarizeBetaRelations(betaRelations));
 
     return roots;
+  }
+
+  // ツリー全体から最新の訪問時刻を取得
+  getLatestVisitTimeInTree(node) {
+    let latestTime = node.visitTime;
+    
+    // 子ノードも再帰的にチェック
+    if (node.children && node.children.length > 0) {
+      for (const child of node.children) {
+        const childLatest = this.getLatestVisitTimeInTree(child);
+        if (childLatest > latestTime) {
+          latestTime = childLatest;
+        }
+      }
+    }
+    
+    return latestTime;
   }
 
   // Beta特殊機能：全ドメインでルートドメインを生成
