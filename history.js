@@ -1891,11 +1891,16 @@ class HistoryManager {
         dataToRender = this.filterTree(betaData, this.currentSearchTerm);
       }
     } else {
-      // 時系列モード：従来の処理
+      // 時系列モード：連続する同じアイテムをまとめて表示
+      let chronologicalData = this.filteredData;
+      
+      // 連続する同じアイテムをまとめる
+      chronologicalData = this.mergeConsecutiveSameItems(chronologicalData);
+
       if (!this.currentSearchTerm) {
-        dataToRender = this.filteredData;
+        dataToRender = chronologicalData;
       } else {
-        dataToRender = this.filterTree(this.filteredData, this.currentSearchTerm);
+        dataToRender = this.filterTree(chronologicalData, this.currentSearchTerm);
       }
     }
 
@@ -1903,7 +1908,84 @@ class HistoryManager {
     this.renderTree(dataToRender);
     this.updatePageInputs();
     this.updateSearchRange();
-  }  filterTree(nodes, searchTerm) {
+  }  // 時系列モードで連続する同じアイテムをまとめる
+  mergeConsecutiveSameItems(nodes) {
+    if (!nodes || nodes.length === 0) return nodes;
+
+    const merged = [];
+    let currentGroup = null;
+
+    for (const node of nodes) {
+      // 親子関係がない（ルートレベル）かつ子要素を持たないノードのみ対象
+      if (node.children.length === 0) {
+        if (currentGroup && this.isSameItem(currentGroup.node, node)) {
+          // 同じアイテムの場合、グループに追加
+          currentGroup.visits.push(node);
+          currentGroup.visitCount++;
+          // 最新の訪問時間を保持
+          if (node.visitTime > currentGroup.node.visitTime) {
+            currentGroup.node.visitTime = node.visitTime;
+          }
+        } else {
+          // 異なるアイテムの場合、前のグループを確定して新しいグループを開始
+          if (currentGroup) {
+            merged.push(this.createMergedNode(currentGroup));
+          }
+          currentGroup = {
+            node: { ...node },
+            visits: [node],
+            visitCount: 1
+          };
+        }
+      } else {
+        // 子要素を持つノードの場合、前のグループを確定して個別に追加
+        if (currentGroup) {
+          merged.push(this.createMergedNode(currentGroup));
+          currentGroup = null;
+        }
+        
+        // 子要素に対しても再帰的に処理
+        const mergedChildren = this.mergeConsecutiveSameItems(node.children);
+        merged.push({
+          ...node,
+          children: mergedChildren
+        });
+      }
+    }
+
+    // 最後のグループを追加
+    if (currentGroup) {
+      merged.push(this.createMergedNode(currentGroup));
+    }
+
+    return merged;
+  }
+
+  // 2つのアイテムが同じかどうかを判定（URLとタイトルで比較）
+  isSameItem(item1, item2) {
+    return item1.url === item2.url && item1.title === item2.title;
+  }
+
+  // マージされたノードを作成
+  createMergedNode(group) {
+    const node = { ...group.node };
+    
+    // 複数の訪問がある場合は、マージ情報を追加
+    if (group.visitCount > 1) {
+      node.isMerged = true;
+      node.mergedVisitCount = group.visitCount;
+      node.allVisits = group.visits;
+      
+      // 最初と最後の訪問時間を記録
+      const sortedVisits = group.visits.sort((a, b) => a.visitTime - b.visitTime);
+      node.firstVisitTime = sortedVisits[0].visitTime;
+      node.lastVisitTime = sortedVisits[sortedVisits.length - 1].visitTime;
+    }
+    
+    return node;
+  }
+
+  filterTree(nodes, searchTerm) {
     const filtered = [];
 
     for (const node of nodes) {
@@ -2038,6 +2120,9 @@ class HistoryManager {
     // モードに応じてタイトル表示を調整
     if (this.viewMode === 'aggregated' && node.visitCount > 1) {
       titleLink.textContent = `${node.title} (${node.visitCount}回)`;
+    } else if (this.viewMode === 'chronological' && node.isMerged && node.mergedVisitCount > 1) {
+      // 時系列モードでマージされたアイテムの場合、訪問回数を表示
+      titleLink.textContent = `${node.title} (${node.mergedVisitCount}回)`;
     } else {
       titleLink.textContent = node.title;
     }
@@ -2069,6 +2154,25 @@ class HistoryManager {
     header.appendChild(titleLink);
 
     li.appendChild(header);
+
+    // マージされたアイテムの詳細情報表示（時系列モードのみ）
+    if (this.viewMode === 'chronological' && node.isMerged && node.mergedVisitCount > 1) {
+      const mergedInfoDiv = document.createElement('div');
+      mergedInfoDiv.className = 'merged-info';
+      mergedInfoDiv.style.fontSize = '12px';
+      mergedInfoDiv.style.color = '#666';
+      mergedInfoDiv.style.marginLeft = '32px'; // アイコン分のマージン
+      mergedInfoDiv.style.marginTop = '2px';
+      
+      const firstTime = new Date(node.firstVisitTime);
+      const lastTime = new Date(node.lastVisitTime);
+      const timeRange = node.firstVisitTime !== node.lastVisitTime 
+        ? `${this.formatTime(firstTime)} ～ ${this.formatTime(lastTime)}`
+        : this.formatTime(lastTime);
+      
+      mergedInfoDiv.textContent = `${node.mergedVisitCount}回の訪問: ${timeRange}`;
+      li.appendChild(mergedInfoDiv);
+    }
 
     // URL表示
     if (node.url !== node.title) {
