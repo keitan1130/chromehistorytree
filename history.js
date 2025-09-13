@@ -2384,6 +2384,18 @@ class HistoryManager {
     timeSpan.className = 'item-time';
     const date = new Date(node.visitTime);
     timeSpan.textContent = this.formatTime(date);
+    
+    // Betaモードで1日以内の履歴は赤色で表示
+    if (this.viewMode === 'beta') {
+      const now = Date.now();
+      const oneDayAgo = now - (24 * 60 * 60 * 1000); // 24時間前
+      
+      if (node.visitTime > oneDayAgo) {
+        timeSpan.style.color = '#ff0000'; // 赤色
+        timeSpan.style.fontWeight = 'bold'; // 太字にしてより目立たせる
+      }
+    }
+    
     header.appendChild(timeSpan);
 
     // ファビコン
