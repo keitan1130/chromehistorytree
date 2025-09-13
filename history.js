@@ -2267,15 +2267,6 @@ class HistoryManager {
     timeSpan.textContent = this.formatTime(date);
     header.appendChild(timeSpan);
 
-    // ツリーID表示（デバッグ用、後で削除可能）
-    const treeIdSpan = document.createElement('span');
-    treeIdSpan.className = 'tree-id-debug';
-    treeIdSpan.textContent = `[${treeId}]`;
-    treeIdSpan.style.fontSize = '10px';
-    treeIdSpan.style.color = '#999';
-    treeIdSpan.style.marginRight = '8px';
-    header.appendChild(treeIdSpan);
-
     // ファビコン
     const favicon = document.createElement('img');
     favicon.className = 'item-favicon';
@@ -2369,7 +2360,7 @@ class HistoryManager {
       rootInfoDiv.style.marginLeft = '32px'; // アイコン分のマージン
       rootInfoDiv.style.marginTop = '2px';
       rootInfoDiv.style.fontStyle = 'italic';
-      
+
       rootInfoDiv.textContent = '';
       // li.appendChild(rootInfoDiv); // 説明文言を削除するためコメントアウト
     }
