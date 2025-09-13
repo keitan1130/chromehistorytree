@@ -1238,7 +1238,7 @@ class HistoryManager {
   // ツリー全体から最新の訪問時刻を取得
   getLatestVisitTimeInTree(node) {
     let latestTime = node.visitTime;
-    
+
     // 子ノードも再帰的にチェック
     if (node.children && node.children.length > 0) {
       for (const child of node.children) {
@@ -1248,7 +1248,7 @@ class HistoryManager {
         }
       }
     }
-    
+
     return latestTime;
   }
 
