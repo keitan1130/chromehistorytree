@@ -1191,7 +1191,10 @@ class HistoryManager {
       }
     }
 
-    // 4. ルートノードを抽出（親を持たない訪問）
+    // 4. Beta特殊機能：検索URLの場合にルートドメインを生成
+    this.generateRootDomainsForSearchUrls(visitMap, processedVisits);
+
+    // 5. ルートノードを抽出（親を持たない訪問）
     const roots = Array.from(visitMap.values()).filter(visit => {
       // 他の訪問の子要素になっていない訪問がルート
       return !Array.from(visitMap.values()).some(parent =>
@@ -1208,7 +1211,7 @@ class HistoryManager {
     };
     roots.forEach(sortChildren);
 
-    // 6. ルートノードを時刻順でソート
+    // 7. ルートノードを時刻順でソート
     roots.sort((a, b) => b.visitTime - a.visitTime);
 
     console.log(`=== Beta Tree 構築完了 ===`);
@@ -1217,6 +1220,104 @@ class HistoryManager {
     console.log(`関係タイプ別:`, this.summarizeBetaRelations(betaRelations));
 
     return roots;
+  }
+
+  // Beta特殊機能：検索URLの場合にルートドメインを生成
+  generateRootDomainsForSearchUrls(visitMap, processedVisits) {
+    console.log('=== 検索URL用ルートドメイン生成開始 ===');
+    
+    const generatedRoots = new Map(); // ドメイン -> 生成されたルートノード
+    const searchUrlPatterns = [
+      { domain: 'www.google.com', patterns: ['/search?', '/url?'] },
+      { domain: 'search.yahoo.com', patterns: ['/search?'] },
+      { domain: 'www.bing.com', patterns: ['/search?'] },
+      { domain: 'duckduckgo.com', patterns: ['/?q='] }
+    ];
+
+    // 検索URLを特定してルートドメインに移動
+    for (const visit of visitMap.values()) {
+      if (processedVisits.has(visit.visitId)) continue;
+
+      try {
+        const url = new URL(visit.url);
+        const hostname = url.hostname;
+        const pathname = url.pathname;
+        const search = url.search;
+
+        // 検索URLパターンにマッチするかチェック
+        const matchedPattern = searchUrlPatterns.find(pattern => 
+          hostname === pattern.domain && 
+          pattern.patterns.some(p => pathname.includes(p.split('?')[0]) && search.length > 0)
+        );
+
+        if (matchedPattern) {
+          const rootDomain = matchedPattern.domain;
+          const rootUrl = `https://${rootDomain}`;
+
+          // ルートドメインノードが存在しないか確認
+          let rootNode = generatedRoots.get(rootDomain);
+          
+          if (!rootNode) {
+            // 既存の訪問でルートドメインが存在するかチェック
+            const existingRoot = Array.from(visitMap.values()).find(v => v.url === rootUrl);
+            
+            if (existingRoot) {
+              rootNode = existingRoot;
+              console.log(`既存のルートドメインを使用: ${rootUrl}`);
+            } else {
+              // 新しいルートドメインノードを生成
+              const rootVisitId = `generated_root_${rootDomain}_${Date.now()}`;
+              rootNode = {
+                visitId: rootVisitId,
+                url: rootUrl,
+                title: this.generateRootDomainTitle(rootDomain),
+                visitTime: visit.visitTime - 1000, // 検索より少し前の時間に設定
+                referringVisitId: null,
+                transition: 'generated',
+                favicon: `https://www.google.com/s2/favicons?domain=${rootDomain}&sz=16`,
+                children: [],
+                betaRelations: [],
+                isGeneratedRoot: true // 生成されたノードであることを示すフラグ
+              };
+              
+              visitMap.set(rootVisitId, rootNode);
+              generatedRoots.set(rootDomain, rootNode);
+              console.log(`新しいルートドメインを生成: ${rootUrl}`);
+            }
+          }
+
+          // 検索URLを生成/既存のルートドメインの子にする
+          rootNode.children.push(visit);
+          visit.betaRelations.push({
+            type: 'generated_root_domain',
+            confidence: 1.0,
+            parentUrl: rootUrl,
+            details: { domain: rootDomain, isGenerated: !existingRoot }
+          });
+          
+          processedVisits.add(visit.visitId);
+          
+          console.log(`検索URLを子に設定: ${rootUrl} -> ${visit.url}`);
+        }
+      } catch (error) {
+        // 無効なURLの場合はスキップ
+        console.warn(`URL解析エラー: ${visit.url}`, error);
+      }
+    }
+
+    console.log(`=== 検索URL用ルートドメイン生成完了: ${generatedRoots.size}個のルートドメイン ===`);
+  }
+
+  // ルートドメインのタイトルを生成
+  generateRootDomainTitle(domain) {
+    const domainTitles = {
+      'www.google.com': 'Google',
+      'search.yahoo.com': 'Yahoo!検索',
+      'www.bing.com': 'Bing',
+      'duckduckgo.com': 'DuckDuckGo'
+    };
+    
+    return domainTitles[domain] || domain;
   }
 
   // URLに基づいて訪問を検索
@@ -1893,7 +1994,7 @@ class HistoryManager {
     } else {
       // 時系列モード：連続する同じアイテムをまとめて表示
       let chronologicalData = this.filteredData;
-      
+
       // 連続する同じアイテムをまとめる
       chronologicalData = this.mergeConsecutiveSameItems(chronologicalData);
 
@@ -1943,7 +2044,7 @@ class HistoryManager {
           merged.push(this.createMergedNode(currentGroup));
           currentGroup = null;
         }
-        
+
         // 子要素に対しても再帰的に処理
         const mergedChildren = this.mergeConsecutiveSameItems(node.children);
         merged.push({
@@ -1969,19 +2070,19 @@ class HistoryManager {
   // マージされたノードを作成
   createMergedNode(group) {
     const node = { ...group.node };
-    
+
     // 複数の訪問がある場合は、マージ情報を追加
     if (group.visitCount > 1) {
       node.isMerged = true;
       node.mergedVisitCount = group.visitCount;
       node.allVisits = group.visits;
-      
+
       // 最初と最後の訪問時間を記録
       const sortedVisits = group.visits.sort((a, b) => a.visitTime - b.visitTime);
       node.firstVisitTime = sortedVisits[0].visitTime;
       node.lastVisitTime = sortedVisits[sortedVisits.length - 1].visitTime;
     }
-    
+
     return node;
   }
 
@@ -2123,6 +2224,9 @@ class HistoryManager {
     } else if (this.viewMode === 'chronological' && node.isMerged && node.mergedVisitCount > 1) {
       // 時系列モードでマージされたアイテムの場合、訪問回数を表示
       titleLink.textContent = `${node.title} (${node.mergedVisitCount}回)`;
+    } else if (this.viewMode === 'beta' && node.isGeneratedRoot) {
+      // Betaモードで生成されたルートドメインの場合、特別なマークを表示
+      titleLink.textContent = `${node.title} 🌐`;
     } else {
       titleLink.textContent = node.title;
     }
@@ -2163,15 +2267,29 @@ class HistoryManager {
       mergedInfoDiv.style.color = '#666';
       mergedInfoDiv.style.marginLeft = '32px'; // アイコン分のマージン
       mergedInfoDiv.style.marginTop = '2px';
-      
+
       const firstTime = new Date(node.firstVisitTime);
       const lastTime = new Date(node.lastVisitTime);
-      const timeRange = node.firstVisitTime !== node.lastVisitTime 
+      const timeRange = node.firstVisitTime !== node.lastVisitTime
         ? `${this.formatTime(firstTime)} ～ ${this.formatTime(lastTime)}`
         : this.formatTime(lastTime);
-      
+
       mergedInfoDiv.textContent = `${node.mergedVisitCount}回の訪問: ${timeRange}`;
       li.appendChild(mergedInfoDiv);
+    }
+
+    // 生成されたルートドメインの説明表示（Betaモードのみ）
+    if (this.viewMode === 'beta' && node.isGeneratedRoot) {
+      const rootInfoDiv = document.createElement('div');
+      rootInfoDiv.className = 'generated-root-info';
+      rootInfoDiv.style.fontSize = '12px';
+      rootInfoDiv.style.color = '#28a745';
+      rootInfoDiv.style.marginLeft = '32px'; // アイコン分のマージン
+      rootInfoDiv.style.marginTop = '2px';
+      rootInfoDiv.style.fontStyle = 'italic';
+      
+      rootInfoDiv.textContent = '自動生成されたルートドメイン（検索URLの整理用）';
+      li.appendChild(rootInfoDiv);
     }
 
     // URL表示
@@ -2276,7 +2394,8 @@ class HistoryManager {
       'new_tab': { icon: '🆕', text: '新タブ', color: '#007bff' },
       'back_navigation': { icon: '⬅️', text: '戻る', color: '#ffc107' },
       'hierarchy_navigation': { icon: '📂', text: '階層', color: '#6f42c1' },
-      'time_based_pattern': { icon: '⏱️', text: '時系列', color: '#fd7e14' }
+      'time_based_pattern': { icon: '⏱️', text: '時系列', color: '#fd7e14' },
+      'generated_root_domain': { icon: '🌐', text: 'ルート', color: '#28a745' }
     };
 
     const display = displays[relation.type] || { icon: '❓', text: '不明', color: '#6c757d' };
@@ -2305,6 +2424,8 @@ class HistoryManager {
         return `${baseTooltip}\n${hierarchyType}の階層移動`;
       case 'time_based_pattern':
         return `${baseTooltip}\n短時間での関連パターン`;
+      case 'generated_root_domain':
+        return `${baseTooltip}\n自動生成されたルートドメインへの関連付け`;
       default:
         return baseTooltip;
     }
