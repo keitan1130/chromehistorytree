@@ -2042,8 +2042,8 @@ class HistoryManager {
       titleLink.textContent = node.title;
     }
 
-    // 特殊な遷移タイプに応じてアイコンを追加
-    if (node.transition) {
+    // 特殊な遷移タイプに応じてアイコンを追加（Betaモードのみ）
+    if (this.viewMode === 'beta' && node.transition) {
       const transitionIcon = this.getTransitionIcon(node.transition);
       if (transitionIcon) {
         const iconSpan = document.createElement('span');
