@@ -1220,7 +1220,10 @@ class HistoryManager {
     };
     roots.forEach(sortChildren);
 
-    // 7. ルートノードを最新の履歴時刻でソート（ツリー全体を考慮）
+    // 7. Beta特殊機能：同じ階層の重複URLをマージ
+    this.mergeDuplicateUrlsInBetaTree(roots);
+
+    // 8. ルートノードを最新の履歴時刻でソート（ツリー全体を考慮）
     roots.sort((a, b) => {
       const aLatest = this.getLatestVisitTimeInTree(a);
       const bLatest = this.getLatestVisitTimeInTree(b);
@@ -1250,6 +1253,92 @@ class HistoryManager {
     }
 
     return latestTime;
+  }
+
+  // Beta専用：同じ階層の重複URLをマージ
+  mergeDuplicateUrlsInBetaTree(nodes) {
+    console.log('=== Beta Tree: 同じ階層の重複URL統合開始 ===');
+
+    this.mergeDuplicateUrlsInLevel(nodes);
+
+    // 子ノードも再帰的に処理
+    for (const node of nodes) {
+      if (node.children && node.children.length > 0) {
+        this.mergeDuplicateUrlsInLevel(node.children);
+        this.mergeDuplicateUrlsInBetaTree(node.children);
+      }
+    }
+
+    console.log('=== Beta Tree: 重複URL統合完了 ===');
+  }
+
+  // 同じ階層内で重複するURLをマージ
+  mergeDuplicateUrlsInLevel(nodes) {
+    if (!nodes || nodes.length <= 1) return;
+
+    const urlGroups = new Map(); // URL -> ノード配列
+
+    // 同じURLのノードをグループ化
+    for (const node of nodes) {
+      if (!urlGroups.has(node.url)) {
+        urlGroups.set(node.url, []);
+      }
+      urlGroups.get(node.url).push(node);
+    }
+
+    // 重複があるURLのみ処理
+    for (const [url, duplicateNodes] of urlGroups) {
+      if (duplicateNodes.length > 1) {
+        console.log(`重複URL統合: ${url} (${duplicateNodes.length}個のノード)`);
+
+        // 最新の訪問時刻を持つノードを主ノードとして選択
+        const mainNode = duplicateNodes.reduce((latest, current) =>
+          current.visitTime > latest.visitTime ? current : latest
+        );
+
+        // 他のノードの子要素と関係情報を主ノードに統合
+        for (const duplicateNode of duplicateNodes) {
+          if (duplicateNode === mainNode) continue;
+
+          // 子要素をマージ
+          if (duplicateNode.children && duplicateNode.children.length > 0) {
+            if (!mainNode.children) mainNode.children = [];
+            mainNode.children.push(...duplicateNode.children);
+          }
+
+          // Beta関係情報をマージ
+          if (duplicateNode.betaRelations && duplicateNode.betaRelations.length > 0) {
+            if (!mainNode.betaRelations) mainNode.betaRelations = [];
+            mainNode.betaRelations.push(...duplicateNode.betaRelations);
+          }
+
+          // 重複ノードをnodesから削除
+          const index = nodes.indexOf(duplicateNode);
+          if (index > -1) {
+            nodes.splice(index, 1);
+          }
+        }
+
+        // 主ノードに統合情報を追加
+        if (duplicateNodes.length > 1) {
+          mainNode.isBetaMerged = true;
+          mainNode.betaMergedCount = duplicateNodes.length;
+          mainNode.betaMergedVisits = duplicateNodes.map(node => ({
+            visitId: node.visitId,
+            visitTime: node.visitTime,
+            transition: node.transition
+          }));
+        }
+
+        // 子要素を時刻順でソート
+        if (mainNode.children && mainNode.children.length > 0) {
+          mainNode.children.sort((a, b) => b.visitTime - a.visitTime);
+
+          // 子要素レベルでも重複をチェック
+          this.mergeDuplicateUrlsInLevel(mainNode.children);
+        }
+      }
+    }
   }
 
   // Beta特殊機能：全ドメインでルートドメインを生成
@@ -2326,6 +2415,9 @@ class HistoryManager {
     } else if (this.viewMode === 'chronological' && node.isMerged && node.mergedVisitCount > 1) {
       // 時系列モードでマージされたアイテムの場合、訪問回数を表示
       titleLink.textContent = `${node.title} (${node.mergedVisitCount}回)`;
+    } else if (this.viewMode === 'beta' && node.isBetaMerged && node.betaMergedCount > 1) {
+      // Betaモードでマージされたアイテムの場合、統合数を表示
+      titleLink.textContent = `${node.title} (${node.betaMergedCount}個統合)`;
     } else if (this.viewMode === 'beta' && node.isGeneratedRoot) {
       // Betaモードで生成されたルートドメインの場合、特別なマークを表示
       titleLink.textContent = `${node.title} 🌐`;
@@ -2378,6 +2470,26 @@ class HistoryManager {
 
       mergedInfoDiv.textContent = `${node.mergedVisitCount}回の訪問: ${timeRange}`;
       li.appendChild(mergedInfoDiv);
+    }
+
+    // Betaモードでマージされたアイテムの詳細情報表示
+    if (this.viewMode === 'beta' && node.isBetaMerged && node.betaMergedCount > 1) {
+      const betaMergedInfoDiv = document.createElement('div');
+      betaMergedInfoDiv.className = 'beta-merged-info';
+      betaMergedInfoDiv.style.fontSize = '12px';
+      betaMergedInfoDiv.style.color = '#007bff';
+      betaMergedInfoDiv.style.marginLeft = '32px'; // アイコン分のマージン
+      betaMergedInfoDiv.style.marginTop = '2px';
+
+      const sortedVisits = node.betaMergedVisits.sort((a, b) => a.visitTime - b.visitTime);
+      const firstTime = new Date(sortedVisits[0].visitTime);
+      const lastTime = new Date(sortedVisits[sortedVisits.length - 1].visitTime);
+      const timeRange = sortedVisits.length > 1
+        ? `${this.formatTime(firstTime)} ～ ${this.formatTime(lastTime)}`
+        : this.formatTime(lastTime);
+
+      betaMergedInfoDiv.textContent = `${node.betaMergedCount}個の重複URLを統合: ${timeRange}`;
+      li.appendChild(betaMergedInfoDiv);
     }
 
     // 生成されたルートドメインの説明表示（Betaモードのみ）- 削除
