@@ -1191,8 +1191,8 @@ class HistoryManager {
       }
     }
 
-    // 4. Beta特殊機能：検索URLの場合にルートドメインを生成
-    this.generateRootDomainsForSearchUrls(visitMap, processedVisits);
+    // 4. Beta特殊機能：全ドメインでルートドメインを生成
+    this.generateRootDomainsForAllUrls(visitMap, processedVisits);
 
     // 5. ルートノードを抽出（親を持たない訪問）
     const roots = Array.from(visitMap.values()).filter(visit => {
@@ -1222,102 +1222,183 @@ class HistoryManager {
     return roots;
   }
 
-  // Beta特殊機能：検索URLの場合にルートドメインを生成
-  generateRootDomainsForSearchUrls(visitMap, processedVisits) {
-    console.log('=== 検索URL用ルートドメイン生成開始 ===');
-    
+  // Beta特殊機能：全ドメインでルートドメインを生成
+  generateRootDomainsForAllUrls(visitMap, processedVisits) {
+    console.log('=== 全ドメイン用ルートドメイン生成開始 ===');
+
     const generatedRoots = new Map(); // ドメイン -> 生成されたルートノード
-    const searchUrlPatterns = [
-      { domain: 'www.google.com', patterns: ['/search?', '/url?'] },
-      { domain: 'search.yahoo.com', patterns: ['/search?'] },
-      { domain: 'www.bing.com', patterns: ['/search?'] },
-      { domain: 'duckduckgo.com', patterns: ['/?q='] }
-    ];
+    const domainGroups = new Map(); // ドメイン -> 訪問リスト
 
-    // 検索URLを特定してルートドメインに移動
+    // 1. まず各ドメインごとに訪問をグループ化
     for (const visit of visitMap.values()) {
-      if (processedVisits.has(visit.visitId)) continue;
-
       try {
         const url = new URL(visit.url);
         const hostname = url.hostname;
-        const pathname = url.pathname;
-        const search = url.search;
 
-        // 検索URLパターンにマッチするかチェック
-        const matchedPattern = searchUrlPatterns.find(pattern => 
-          hostname === pattern.domain && 
-          pattern.patterns.some(p => pathname.includes(p.split('?')[0]) && search.length > 0)
-        );
-
-        if (matchedPattern) {
-          const rootDomain = matchedPattern.domain;
-          const rootUrl = `https://${rootDomain}`;
-
-          // ルートドメインノードが存在しないか確認
-          let rootNode = generatedRoots.get(rootDomain);
-          
-          if (!rootNode) {
-            // 既存の訪問でルートドメインが存在するかチェック
-            const existingRoot = Array.from(visitMap.values()).find(v => v.url === rootUrl);
-            
-            if (existingRoot) {
-              rootNode = existingRoot;
-              console.log(`既存のルートドメインを使用: ${rootUrl}`);
-            } else {
-              // 新しいルートドメインノードを生成
-              const rootVisitId = `generated_root_${rootDomain}_${Date.now()}`;
-              rootNode = {
-                visitId: rootVisitId,
-                url: rootUrl,
-                title: this.generateRootDomainTitle(rootDomain),
-                visitTime: visit.visitTime - 1000, // 検索より少し前の時間に設定
-                referringVisitId: null,
-                transition: 'generated',
-                favicon: `https://www.google.com/s2/favicons?domain=${rootDomain}&sz=16`,
-                children: [],
-                betaRelations: [],
-                isGeneratedRoot: true // 生成されたノードであることを示すフラグ
-              };
-              
-              visitMap.set(rootVisitId, rootNode);
-              generatedRoots.set(rootDomain, rootNode);
-              console.log(`新しいルートドメインを生成: ${rootUrl}`);
-            }
-          }
-
-          // 検索URLを生成/既存のルートドメインの子にする
-          rootNode.children.push(visit);
-          visit.betaRelations.push({
-            type: 'generated_root_domain',
-            confidence: 1.0,
-            parentUrl: rootUrl,
-            details: { domain: rootDomain, isGenerated: !existingRoot }
-          });
-          
-          processedVisits.add(visit.visitId);
-          
-          console.log(`検索URLを子に設定: ${rootUrl} -> ${visit.url}`);
+        if (!domainGroups.has(hostname)) {
+          domainGroups.set(hostname, []);
         }
+        domainGroups.get(hostname).push(visit);
       } catch (error) {
         // 無効なURLの場合はスキップ
         console.warn(`URL解析エラー: ${visit.url}`, error);
       }
     }
 
-    console.log(`=== 検索URL用ルートドメイン生成完了: ${generatedRoots.size}個のルートドメイン ===`);
-  }
+    // 2. 各ドメインで処理
+    for (const [hostname, visits] of domainGroups) {
+      // ドメイン内で親子関係がない（孤立した）訪問を特定
+      // ただし、既にツリー構造がある場合は最上位の親のみを対象とする
+      const orphanVisits = visits.filter(visit => {
+        // まだ処理されていない訪問のみ
+        if (processedVisits.has(visit.visitId)) return false;
 
-  // ルートドメインのタイトルを生成
-  generateRootDomainTitle(domain) {
+        // 他の訪問の子になっていない訪問（= 最上位の親または孤立）
+        const isTopLevel = !visits.some(otherVisit =>
+          otherVisit.children && otherVisit.children.includes(visit)
+        );
+
+        return isTopLevel;
+      });
+
+      if (orphanVisits.length === 0) continue;
+
+      // ドメインのルートURL（ホームページ）を構築
+      const rootUrl = `https://${hostname}`;
+
+      // 既存のルートページ（ホームページ）があるかチェック
+      const existingRootVisit = visits.find(visit => {
+        try {
+          const visitUrl = new URL(visit.url);
+          return visitUrl.pathname === '/' && visitUrl.search === '' && visitUrl.hash === '';
+        } catch {
+          return false;
+        }
+      });
+
+      // 複数の孤立した訪問がある場合、またはルートページが存在しない場合にルートドメインを生成
+      // ただし、単一の孤立した訪問でも、それが既にツリー構造を持っている場合は対象とする
+      const hasTreeStructure = orphanVisits.some(visit => visit.children && visit.children.length > 0);
+      const shouldGenerateRoot = orphanVisits.length > 1 || !existingRootVisit || hasTreeStructure;
+
+      if (shouldGenerateRoot) {
+        let rootNode = generatedRoots.get(hostname);
+
+        if (!rootNode) {
+          if (existingRootVisit) {
+            // 既存のルートページを使用
+            rootNode = existingRootVisit;
+            console.log(`既存のルートページを使用: ${rootUrl}`);
+          } else {
+            // 新しいルートドメインノードを生成
+            const rootVisitId = `generated_root_${hostname}_${Date.now()}`;
+
+            // 最初の訪問時間を基準にルートの時間を設定
+            const earliestVisit = orphanVisits.reduce((earliest, current) =>
+              current.visitTime < earliest.visitTime ? current : earliest
+            );
+
+            rootNode = {
+              visitId: rootVisitId,
+              url: rootUrl,
+              title: this.generateRootDomainTitle(hostname),
+              visitTime: earliestVisit.visitTime - 1000, // 最初の訪問より少し前
+              referringVisitId: null,
+              transition: 'generated',
+              favicon: `https://www.google.com/s2/favicons?domain=${hostname}&sz=16`,
+              children: [],
+              betaRelations: [],
+              isGeneratedRoot: true
+            };
+
+            visitMap.set(rootVisitId, rootNode);
+            console.log(`新しいルートドメインを生成: ${rootUrl}`);
+          }
+
+          generatedRoots.set(hostname, rootNode);
+        }
+
+        // 孤立した訪問をルートドメインの子にする
+        for (const orphanVisit of orphanVisits) {
+          // ただし、既にルートページとして使用している場合は除外
+          if (orphanVisit === rootNode) continue;
+
+          rootNode.children.push(orphanVisit);
+          orphanVisit.betaRelations.push({
+            type: 'generated_root_domain',
+            confidence: 1.0,
+            parentUrl: rootUrl,
+            details: {
+              domain: hostname,
+              isGenerated: !existingRootVisit || rootNode.isGeneratedRoot,
+              reason: 'domain_organization'
+            }
+          });
+
+          processedVisits.add(orphanVisit.visitId);
+
+          console.log(`URLを${hostname}ルートドメインの子に設定: ${orphanVisit.url}`);
+        }
+      }
+    }
+
+    console.log(`=== 全ドメイン用ルートドメイン生成完了: ${generatedRoots.size}個のルートドメイン ===`);
+  }  // ルートドメインのタイトルを生成
+  generateRootDomainTitle(hostname) {
     const domainTitles = {
       'www.google.com': 'Google',
+      'google.com': 'Google',
       'search.yahoo.com': 'Yahoo!検索',
+      'www.yahoo.com': 'Yahoo!',
+      'yahoo.com': 'Yahoo!',
       'www.bing.com': 'Bing',
-      'duckduckgo.com': 'DuckDuckGo'
+      'bing.com': 'Bing',
+      'duckduckgo.com': 'DuckDuckGo',
+      'www.youtube.com': 'YouTube',
+      'youtube.com': 'YouTube',
+      'www.facebook.com': 'Facebook',
+      'facebook.com': 'Facebook',
+      'www.twitter.com': 'Twitter',
+      'twitter.com': 'Twitter',
+      'x.com': 'X (Twitter)',
+      'www.instagram.com': 'Instagram',
+      'instagram.com': 'Instagram',
+      'www.linkedin.com': 'LinkedIn',
+      'linkedin.com': 'LinkedIn',
+      'github.com': 'GitHub',
+      'www.github.com': 'GitHub',
+      'stackoverflow.com': 'Stack Overflow',
+      'www.amazon.com': 'Amazon',
+      'amazon.com': 'Amazon',
+      'www.amazon.co.jp': 'Amazon Japan',
+      'amazon.co.jp': 'Amazon Japan',
+      'www.wikipedia.org': 'Wikipedia',
+      'ja.wikipedia.org': 'Wikipedia (日本語)',
+      'en.wikipedia.org': 'Wikipedia (English)',
+      'www.reddit.com': 'Reddit',
+      'reddit.com': 'Reddit',
+      'qiita.com': 'Qiita',
+      'zenn.dev': 'Zenn'
     };
-    
-    return domainTitles[domain] || domain;
+
+    // 既知のドメインの場合は専用タイトルを返す
+    if (domainTitles[hostname]) {
+      return domainTitles[hostname];
+    }
+
+    // 未知のドメインの場合は、ドメイン名から推測してタイトルを生成
+    const parts = hostname.split('.');
+
+    // www.example.com -> Example、subdomain.example.com -> Example のような形式
+    let baseDomain = parts[parts.length - 2]; // example部分を取得
+
+    if (baseDomain) {
+      // 最初の文字を大文字にする
+      return baseDomain.charAt(0).toUpperCase() + baseDomain.slice(1);
+    }
+
+    // フォールバック：そのままホスト名を返す
+    return hostname;
   }
 
   // URLに基づいて訪問を検索
@@ -2287,7 +2368,7 @@ class HistoryManager {
       rootInfoDiv.style.marginLeft = '32px'; // アイコン分のマージン
       rootInfoDiv.style.marginTop = '2px';
       rootInfoDiv.style.fontStyle = 'italic';
-      
+
       rootInfoDiv.textContent = '自動生成されたルートドメイン（検索URLの整理用）';
       li.appendChild(rootInfoDiv);
     }
