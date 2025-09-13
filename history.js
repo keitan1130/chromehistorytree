@@ -2416,37 +2416,24 @@ class HistoryManager {
       // 時系列モードでマージされたアイテムの場合、訪問回数を表示
       titleLink.textContent = `${node.title} (${node.mergedVisitCount}回)`;
     } else if (this.viewMode === 'beta' && node.isBetaMerged && node.betaMergedCount > 1) {
-      // Betaモードでマージされたアイテムの場合、統合数を表示
-      titleLink.textContent = `${node.title} (${node.betaMergedCount}個統合)`;
+      // Betaモードでマージされたアイテムの場合、集計モードと同じ形式で回数を表示
+      titleLink.textContent = `${node.title} (${node.betaMergedCount}回)`;
     } else if (this.viewMode === 'beta' && node.isGeneratedRoot) {
-      // Betaモードで生成されたルートドメインの場合、特別なマークを表示
-      titleLink.textContent = `${node.title} 🌐`;
+      // Betaモードで生成されたルートドメインの場合、🌐マークを削除
+      titleLink.textContent = node.title;
     } else {
       titleLink.textContent = node.title;
     }
 
-    // 特殊な遷移タイプに応じてアイコンを追加（Betaモードのみ）
-    if (this.viewMode === 'beta' && node.transition) {
-      const transitionIcon = this.getTransitionIcon(node.transition);
-      if (transitionIcon) {
-        const iconSpan = document.createElement('span');
-        iconSpan.className = 'transition-icon';
-        iconSpan.textContent = transitionIcon;
-        iconSpan.title = this.getTransitionDescription(node.transition);
-        iconSpan.style.marginLeft = '8px';
-        iconSpan.style.fontSize = '12px';
-        iconSpan.style.opacity = '0.7';
-        titleLink.appendChild(iconSpan);
-      }
-    }
-
-    // Beta関係の表示
+    // Beta関係の表示 - アイコンと関係情報を削除
+    /*
     if (this.viewMode === 'beta' && node.betaRelations && node.betaRelations.length > 0) {
       const betaInfo = this.createBetaRelationInfo(node.betaRelations);
       if (betaInfo) {
         titleLink.appendChild(betaInfo);
       }
     }
+    */
 
     titleLink.target = '_blank';
     header.appendChild(titleLink);
@@ -2472,7 +2459,8 @@ class HistoryManager {
       li.appendChild(mergedInfoDiv);
     }
 
-    // Betaモードでマージされたアイテムの詳細情報表示
+    // Betaモードでマージされたアイテムの詳細情報表示 - 削除
+    /*
     if (this.viewMode === 'beta' && node.isBetaMerged && node.betaMergedCount > 1) {
       const betaMergedInfoDiv = document.createElement('div');
       betaMergedInfoDiv.className = 'beta-merged-info';
@@ -2491,6 +2479,7 @@ class HistoryManager {
       betaMergedInfoDiv.textContent = `${node.betaMergedCount}個の重複URLを統合: ${timeRange}`;
       li.appendChild(betaMergedInfoDiv);
     }
+    */
 
     // 生成されたルートドメインの説明表示（Betaモードのみ）- 削除
     /*
