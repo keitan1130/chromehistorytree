@@ -2385,30 +2385,28 @@ class HistoryManager {
     const date = new Date(node.visitTime);
     timeSpan.textContent = this.formatTime(date);
 
-    // Betaモードで1日以内の履歴を6段階で色分け
-    if (this.viewMode === 'beta') {
-      const now = Date.now();
-      const hoursAgo = (now - node.visitTime) / (60 * 60 * 1000);
+    // 1日以内の履歴を6段階で色分け（全モード共通）
+    const now = Date.now();
+    const hoursAgo = (now - node.visitTime) / (60 * 60 * 1000);
 
-      if (hoursAgo <= 1) {
-        // 1時間以内: 鮮やかな赤
-        timeSpan.style.color = '#ff0000';
-      } else if (hoursAgo <= 3) {
-        // 3時間以内: オレンジ
-        timeSpan.style.color = '#ff6600';
-      } else if (hoursAgo <= 6) {
-        // 6時間以内: 黄色
-        timeSpan.style.color = '#cc9900';
-      } else if (hoursAgo <= 12) {
-        // 12時間以内: 青
-        timeSpan.style.color = '#0066cc';
-      } else if (hoursAgo <= 24) {
-        // 24時間以内: 紫
-        timeSpan.style.color = '#663399';
-      } else {
-        // 1日を超過: 通常色
-        timeSpan.style.color = '';
-      }
+    if (hoursAgo <= 1) {
+      // 1時間以内: 鮮やかな赤
+      timeSpan.style.color = '#ff0000';
+    } else if (hoursAgo <= 3) {
+      // 3時間以内: オレンジ
+      timeSpan.style.color = '#ff6600';
+    } else if (hoursAgo <= 6) {
+      // 6時間以内: 黄色
+      timeSpan.style.color = '#cc9900';
+    } else if (hoursAgo <= 12) {
+      // 12時間以内: 青
+      timeSpan.style.color = '#0066cc';
+    } else if (hoursAgo <= 24) {
+      // 24時間以内: 紫
+      timeSpan.style.color = '#663399';
+    } else {
+      // 1日を超過: 通常色
+      timeSpan.style.color = '';
     }
 
     header.appendChild(timeSpan);
