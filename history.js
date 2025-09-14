@@ -2465,7 +2465,8 @@ class HistoryManager {
 
     li.appendChild(header);
 
-    // マージされたアイテムの詳細情報表示（時系列モードのみ）
+    // マージされたアイテムの詳細情報表示（時系列モードのみ）- 非表示化
+    /*
     if (this.viewMode === 'chronological' && node.isMerged && node.mergedVisitCount > 1) {
       const mergedInfoDiv = document.createElement('div');
       mergedInfoDiv.className = 'merged-info';
@@ -2483,6 +2484,7 @@ class HistoryManager {
       mergedInfoDiv.textContent = `${node.mergedVisitCount}回の訪問: ${timeRange}`;
       li.appendChild(mergedInfoDiv);
     }
+    */
 
     // Betaモードでマージされたアイテムの詳細情報表示 - 削除
     /*
